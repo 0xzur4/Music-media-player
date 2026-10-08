@@ -380,45 +380,51 @@ impl eframe::App for MusicApp {
             return;
         }
 
-        // ---- Bar atas ----
-        egui::Panel::top("top").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("🎵 Joni Music");
+        // ---- Kiri: List Lagu (full height) ----
+        egui::Panel::left("playlist")
+            .resizable(true)
+            .default_size(300.0)
+            .show(ui, |ui| {
+                ui.heading(format!("Playlist ({})", self.tracks.len()));
+                ui.text_edit_singleline(&mut self.search);
                 ui.separator();
-                if ui.button("📁 Folder Musik").clicked() {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        self.set_music_dir(dir);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for idx in self.filtered_indices() {
+                        let is_current = self.current == Some(idx);
+                        let (display, dur_s) = {
+                            let t = &self.tracks[idx];
+                            (t.display(), t.duration_secs)
+                        };
+                        // Tanpa blok hijau: lagu aktif ditandai ▶ putih tebal
+                        let row = if is_current {
+                            egui::RichText::new(format!("▶ {display}"))
+                                .size(14.0)
+                                .strong()
+                                .color(egui::Color32::WHITE)
+                        } else {
+                            egui::RichText::new(display)
+                                .size(14.0)
+                                .color(egui::Color32::from_gray(175))
+                        };
+                        let resp = ui.add(
+                            egui::Label::new(row)
+                                .sense(egui::Sense::click())
+                                .truncate(),
+                        );
+                        if resp.clicked() {
+                            self.play_index(idx);
+                        }
+                        ui.small(
+                            egui::RichText::new(fmt_time(dur_s))
+                                .color(egui::Color32::from_gray(110)),
+                        );
+                        ui.add_space(4.0);
                     }
-                }
-                if ui.button("🔄 Pindai Ulang").clicked() {
-                    if let Some(dir) = self.music_dir.clone() {
-                        self.set_music_dir(dir);
-                    }
-                }
-                if ui
-                    .button("🧲 Mini")
-                    .on_hover_text("Ubah jadi layar kecil transparan")
-                    .clicked()
-                {
-                    let ctx = ui.ctx().clone();
-                    self.set_mini(&ctx, true);
-                }
-                ui.separator();
-                ui.label(&self.status_msg);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.small(
-                        egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                            .color(egui::Color32::from_gray(120)),
-                    );
                 });
             });
-        });
 
-        // ---- Panel lirik (kanan) : gaya Spotify + karaoke ----
-        egui::Panel::right("lyrics")
-            .resizable(true)
-            .default_size(460.0)
-            .show(ui, |ui| {
+        // ---- Tengah: LIRIK (karaoke, gaya Spotify) ----
+        egui::CentralPanel::default().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("Lirik");
                     ui.with_layout(
@@ -532,103 +538,71 @@ impl eframe::App for MusicApp {
                 }
             });
 
-        // ---- Panel playlist (kiri) ----
-        egui::Panel::left("playlist")
-            .resizable(true)
-            .default_size(300.0)
+        // ---- Bawah: Pengaturan Musik ----
+        egui::Panel::bottom("controls")
+            .resizable(false)
+            .default_size(112.0)
             .show(ui, |ui| {
-                ui.heading(format!("Playlist ({})", self.tracks.len()));
-                ui.text_edit_singleline(&mut self.search);
-                ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for idx in self.filtered_indices() {
-                        let is_current = self.current == Some(idx);
-                        let (display, dur_s) = {
-                            let t = &self.tracks[idx];
-                            (t.display(), t.duration_secs)
-                        };
-                        // Tanpa blok hijau: lagu aktif ditandai ▶ putih tebal
-                        let row = if is_current {
-                            egui::RichText::new(format!("▶ {display}"))
-                                .size(14.0)
-                                .strong()
-                                .color(egui::Color32::WHITE)
-                        } else {
-                            egui::RichText::new(display)
-                                .size(14.0)
-                                .color(egui::Color32::from_gray(175))
-                        };
-                        let resp = ui.add(
-                            egui::Label::new(row)
-                                .sense(egui::Sense::click())
-                                .truncate(),
-                        );
-                        if resp.clicked() {
-                            self.play_index(idx);
-                        }
-                        ui.small(
-                            egui::RichText::new(fmt_time(dur_s))
-                                .color(egui::Color32::from_gray(110)),
-                        );
-                        ui.add_space(4.0);
-                    }
-                });
-            });
-
-        // ---- Panel kontrol (tengah/bawah) ----
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(20.0);
-                match self.current.and_then(|i| self.tracks.get(i)) {
-                    Some(t) => {
-                        ui.heading(&t.title);
-                        ui.label(
-                            egui::RichText::new(if t.artist.is_empty() {
-                                "Unknown Artist".to_string()
-                            } else {
-                                t.artist.clone()
-                            })
-                            .size(16.0)
-                            .color(egui::Color32::GRAY),
-                        );
-                        if !t.album.is_empty() {
-                            ui.small(&t.album);
-                        }
-                    }
-                    None => {
-                        ui.heading("Belum ada lagu diputar");
-                        ui.small("Pilih lagu dari playlist di kiri.");
-                    }
-                }
-                ui.add_space(16.0);
-
-                // Progress + seek
-                let dur = self.player.duration().max(0.01);
-                let mut pos = self.player.position();
+                ui.add_space(6.0);
+                // Baris 1: info lagu + tombol utilitas + status
                 ui.horizontal(|ui| {
-                    ui.label(fmt_time(pos));
-                    let slider = egui::Slider::new(&mut pos, 0.0..=dur)
-                        .show_value(false)
-                        .trailing_fill(true);
-                    let resp = ui.add_sized(
-                        ui.available_size_before_wrap() - egui::vec2(110.0, 0.0),
-                        slider,
-                    );
-                    if resp.drag_stopped() {
-                        self.player.seek(pos);
+                    match self.current.and_then(|i| self.tracks.get(i)) {
+                        Some(t) => {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} — {}",
+                                    t.title,
+                                    if t.artist.is_empty() {
+                                        "Unknown Artist"
+                                    } else {
+                                        t.artist.as_str()
+                                    }
+                                ))
+                                .strong()
+                                .size(15.0),
+                            );
+                        }
+                        None => {
+                            ui.label("Belum ada lagu diputar");
+                        }
                     }
-                    ui.label(fmt_time(dur));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.small(
+                            egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                .color(egui::Color32::from_gray(120)),
+                        );
+                        ui.separator();
+                        if ui
+                            .button("🧲 Mini")
+                            .on_hover_text("Ubah jadi layar kecil transparan")
+                            .clicked()
+                        {
+                            let ctx = ui.ctx().clone();
+                            self.set_mini(&ctx, true);
+                        }
+                        if ui.button("🔄 Pindai Ulang").clicked() {
+                            if let Some(dir) = self.music_dir.clone() {
+                                self.set_music_dir(dir);
+                            }
+                        }
+                        if ui.button("📁 Folder Musik").clicked() {
+                            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                                self.set_music_dir(dir);
+                            }
+                        }
+                        ui.separator();
+                        ui.label(&self.status_msg);
+                    });
                 });
-                ui.add_space(8.0);
-
-                // Tombol kontrol
+                ui.add_space(4.0);
+                // Baris 2: kontrol pemutaran + progress + volume
                 ui.horizontal(|ui| {
                     if ui.button("⏮").clicked() {
                         self.prev();
                     }
                     let play_label = if self.player.is_playing() { "⏸" } else { "▶" };
                     if ui
-                        .add_sized(egui::vec2(64.0, 40.0), egui::Button::new(play_label))
+                        .add_sized(egui::vec2(56.0, 36.0), egui::Button::new(play_label))
                         .clicked()
                     {
                         if self.player.has_track() {
@@ -640,21 +614,38 @@ impl eframe::App for MusicApp {
                     if ui.button("⏭").clicked() {
                         self.next();
                     }
-                    ui.separator();
+                    ui.add_space(8.0);
+                    let dur = self.player.duration().max(0.01);
+                    let mut pos = self.player.position();
+                    ui.label(fmt_time(pos));
+                    // Slider mengisi sisa lebar; sisakan ruang untuk durasi + volume
+                    let slider_w = (ui.available_width() - 175.0).max(60.0);
+                    let slider = egui::Slider::new(&mut pos, 0.0..=dur)
+                        .show_value(false)
+                        .trailing_fill(true);
+                    if ui
+                        .add_sized(egui::vec2(slider_w, 0.0), slider)
+                        .drag_stopped()
+                    {
+                        self.player.seek(pos);
+                    }
+                    ui.label(fmt_time(dur));
+                    ui.add_space(8.0);
                     ui.label("🔊");
                     let mut vol = self.volume;
                     if ui
-                        .add(egui::Slider::new(&mut vol, 0.0..=100.0).show_value(false))
+                        .add_sized(
+                            egui::vec2(100.0, 0.0),
+                            egui::Slider::new(&mut vol, 0.0..=100.0).show_value(false),
+                        )
                         .changed()
                     {
                         self.volume = vol;
                         self.player.set_volume(vol / 100.0);
                     }
                 });
-                ui.add_space(16.0);
-                ui.small("Lirik diambil online sekali, lalu tersimpan — bisa dipakai offline & tersinkron.");
+                ui.add_space(4.0);
             });
-        });
 
         // Refresh terus agar lirik & progress sinkron
         ui.ctx().request_repaint_after(Duration::from_millis(200));

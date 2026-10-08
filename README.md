@@ -16,6 +16,13 @@ Music media player desktop untuk Windows, ditulis dengan Rust.
 - Playlist + pencarian, seek bar, kontrol volume, auto-lanjut ke lagu berikut
 - Tema gelap ala Spotify
 
+## Tata letak
+
+- **Kiri**: List Lagu (full height) + pencarian
+- **Tengah**: LIRIK karaoke besar
+- **Bawah**: Pengaturan Musik — info lagu, tombol ⏮ ▶/⏸ ⏭,
+  progress bar, volume, Folder Musik / Pindai Ulang / Mini / status
+
 ## Build
 
 Butuh Rust stable + target Windows:
