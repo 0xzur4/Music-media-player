@@ -1,6 +1,6 @@
 [package]
 name = "joni-music"
-version = "1.5.0"
+version = "1.6.0"
 edition = "2021"
 description = "Music media player (offline + online synced lyrics) untuk Windows"
 

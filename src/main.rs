@@ -42,6 +42,7 @@ const SPOT_GREEN: egui::Color32 = egui::Color32::from_rgb(0x1e, 0xd7, 0x60);
 const SPOT_WHITE: egui::Color32 = egui::Color32::WHITE;
 const SPOT_GRAY: egui::Color32 = egui::Color32::from_rgb(0xb3, 0xb3, 0xb3);
 const SPOT_DIM: egui::Color32 = egui::Color32::from_rgb(0xa7, 0xa7, 0xa7);
+const SPOT_GREEN_HOVER: egui::Color32 = egui::Color32::from_rgb(0x1f, 0xdf, 0x64);
 
 /// Ikon equalizer animasi untuk baris lagu yang sedang diputar.
 fn eq_bars(ui: &mut egui::Ui, t: f64) {
@@ -75,8 +76,6 @@ struct MusicApp {
     lyric_scroll: f32,
     mini_mode: bool,
     view: View,
-    view_hist: Vec<View>,
-    view_hist_pos: usize,
     shuffle: bool,
     repeat: RepeatMode,
     shuffle_order: Vec<usize>,
@@ -104,9 +103,7 @@ impl MusicApp {
             status_msg: String::from("Pilih folder musik untuk mulai."),
             lyric_scroll: 0.0,
             mini_mode: false,
-            view: View::Playlist,
-            view_hist: vec![View::Playlist],
-            view_hist_pos: 0,
+            view: View::Lyrics,
             shuffle: false,
             repeat: RepeatMode::Off,
             shuffle_order: Vec::new(),
@@ -291,29 +288,6 @@ impl MusicApp {
     }
 
     /// Pindah tampilan utama (dengan riwayat untuk ‹ ›).
-    fn goto_view(&mut self, v: View) {
-        if self.view != v {
-            self.view_hist.truncate(self.view_hist_pos + 1);
-            self.view_hist.push(v);
-            self.view_hist_pos = self.view_hist.len() - 1;
-            self.view = v;
-        }
-    }
-
-    fn go_back(&mut self) {
-        if self.view_hist_pos > 0 {
-            self.view_hist_pos -= 1;
-            self.view = self.view_hist[self.view_hist_pos];
-        }
-    }
-
-    fn go_forward(&mut self) {
-        if self.view_hist_pos + 1 < self.view_hist.len() {
-            self.view_hist_pos += 1;
-            self.view = self.view_hist[self.view_hist_pos];
-        }
-    }
-
     /// Masuk/keluar mode mini player: jendela kecil transparan always-on-top.
     fn set_mini(&mut self, ctx: &egui::Context, mini: bool) {
         self.mini_mode = mini;
@@ -453,30 +427,194 @@ impl MusicApp {
     }
 
     /// Tampilan daftar lagu ala Spotify: header + tabel # | Judul | Album | Durasi.
-    fn show_playlist(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(8.0);
+    /// Tombol play lingkaran hijau ala Spotify.
+    fn green_play_button(&mut self, ui: &mut egui::Ui, d: f32) {
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(d, d), egui::Sense::click());
+        let c = rect.center();
+        let col = if resp.hovered() {
+            SPOT_GREEN_HOVER
+        } else {
+            SPOT_GREEN
+        };
+        ui.painter().circle_filled(c, d / 2.0, col);
+        let glyph = if self.player.is_playing() {
+            "⏸"
+        } else {
+            "▶"
+        };
+        ui.painter().text(
+            c,
+            egui::Align2::CENTER_CENTER,
+            glyph,
+            egui::FontId::proportional(d * 0.42),
+            egui::Color32::BLACK,
+        );
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            self.toggle_play();
+        }
+    }
+
+    /// Tabel lagu # | Judul | Album | Durasi. `compact` = versi rapat untuk sidebar.
+    /// Baris aktif: teks hijau + equalizer animasi. Klik baris = putar.
+    fn show_track_table(&mut self, ui: &mut egui::Ui, compact: bool) {
+        if self.tracks.is_empty() {
+            ui.label(
+                egui::RichText::new("Pilih folder musik untuk mulai.")
+                    .size(13.0)
+                    .color(SPOT_DIM),
+            );
+            return;
+        }
+        let row_h = if compact { 40.0 } else { 56.0 };
+        let num_w = 32.0;
+        let album_w = if compact { 92.0 } else { 200.0 };
+        let dur_w = 48.0;
+        let title_size = if compact { 13.0 } else { 15.0 };
+        // Header
         ui.horizontal(|ui| {
-            ui.add_space(20.0);
-            if ui
-                .add_sized(
-                    egui::vec2(56.0, 56.0),
-                    egui::Button::new(
-                        egui::RichText::new("\u{25B6}").size(22.0).color(egui::Color32::BLACK),
-                    )
-                    .fill(SPOT_GREEN)
-                    .corner_radius(egui::CornerRadius::same(28)),
+            ui.add_sized(
+                egui::vec2(num_w, 16.0),
+                egui::Label::new(egui::RichText::new("#").size(11.0).color(SPOT_DIM)),
+            );
+            let rest = ui.available_width();
+            let tw = (rest - album_w - dur_w - 24.0).max(60.0);
+            ui.add_sized(
+                egui::vec2(tw, 16.0),
+                egui::Label::new(egui::RichText::new("Judul").size(11.0).color(SPOT_DIM)),
+            );
+            ui.add_sized(
+                egui::vec2(album_w, 16.0),
+                egui::Label::new(egui::RichText::new("Album").size(11.0).color(SPOT_DIM)),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(egui::RichText::new("⏱").size(11.0).color(SPOT_DIM));
+            });
+        });
+        ui.separator();
+        let t_now = ui.ctx().input(|i| i.time);
+        let playing = self.player.is_playing();
+        let mut clicked_idx: Option<usize> = None;
+        for (num, idx) in self.filtered_indices().iter().enumerate() {
+            let idx = *idx;
+            let is_current = self.current == Some(idx);
+            let (title, artist, album, dur_s) = {
+                let t = &self.tracks[idx];
+                (
+                    t.title.clone(),
+                    t.artist.clone(),
+                    t.album.clone(),
+                    t.duration_secs,
                 )
-                .on_hover_text("Putar")
-                .clicked()
-            {
-                self.toggle_play();
+            };
+            let (rect, resp) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), row_h),
+                egui::Sense::click(),
+            );
+            if resp.hovered() {
+                ui.painter().rect_filled(rect, 4.0, SPOT_HOVER);
             }
+            if resp.clicked() {
+                clicked_idx = Some(idx);
+            }
+            let mut cui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            // Kolom #
+            cui.allocate_ui_with_layout(
+                egui::vec2(num_w, row_h),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    if is_current {
+                        if playing {
+                            eq_bars(ui, t_now);
+                        } else {
+                            ui.label(
+                                egui::RichText::new("▶").size(12.0).color(SPOT_GREEN),
+                            );
+                        }
+                    } else {
+                        ui.label(
+                            egui::RichText::new(format!("{}", num + 1))
+                                .size(13.0)
+                                .color(SPOT_GRAY),
+                        );
+                    }
+                },
+            );
+            // Kolom Judul + artis
+            let rest = cui.available_width();
+            let tw = (rest - album_w - dur_w - 24.0).max(60.0);
+            cui.allocate_ui_with_layout(
+                egui::vec2(tw, row_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    let tcol = if is_current { SPOT_GREEN } else { SPOT_WHITE };
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&title)
+                                .size(title_size)
+                                .strong()
+                                .color(tcol),
+                        )
+                        .truncate(),
+                    );
+                    let a = if artist.is_empty() {
+                        "Unknown Artist".to_string()
+                    } else {
+                        artist
+                    };
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(a).size(12.0).color(SPOT_GRAY),
+                        )
+                        .truncate(),
+                    );
+                },
+            );
+            cui.add_space(8.0);
+            cui.add_sized(
+                egui::vec2(album_w, row_h),
+                egui::Label::new(egui::RichText::new(album).size(12.0).color(SPOT_GRAY))
+                    .truncate(),
+            );
+            cui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(fmt_time(dur_s)).size(12.0).color(SPOT_GRAY),
+                );
+            });
+        }
+        if let Some(i) = clicked_idx {
+            self.play_index(i);
+        }
+    }
+
+    /// Halaman playlist untuk konten utama (view Home): header lega + tabel.
+    fn show_playlist_page(&mut self, ui: &mut egui::Ui) {
+        if self.tracks.is_empty() {
+            ui.centered_and_justified(|ui| {
+                ui.label(
+                    egui::RichText::new("Pilih folder musik untuk mulai.")
+                        .size(18.0)
+                        .color(SPOT_GRAY),
+                );
+            });
+            return;
+        }
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.add_space(16.0);
+            self.green_play_button(ui, 56.0);
             ui.add_space(12.0);
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("Playlist").size(13.0).color(SPOT_GRAY));
                 ui.label(
                     egui::RichText::new("Koleksi Lagu")
-                        .size(40.0)
+                        .size(34.0)
                         .strong()
                         .color(SPOT_WHITE),
                 );
@@ -487,105 +625,201 @@ impl MusicApp {
                 );
             });
         });
-        ui.add_space(12.0);
-        // Header tabel
-        ui.horizontal(|ui| {
-            ui.add_space(20.0);
-            ui.add_sized(
-                egui::vec2(36.0, 0.0),
-                egui::Label::new(egui::RichText::new("#").size(12.0).color(SPOT_DIM)),
-            );
-            let tw = (ui.available_width() - 340.0).max(120.0);
-            ui.add_sized(
-                egui::vec2(tw, 0.0),
-                egui::Label::new(egui::RichText::new("Judul").size(12.0).color(SPOT_DIM)),
-            );
-            ui.add_sized(
-                egui::vec2(220.0, 0.0),
-                egui::Label::new(egui::RichText::new("Album").size(12.0).color(SPOT_DIM)),
-            );
-            ui.label(egui::RichText::new("\u{23F1}").size(12.0).color(SPOT_DIM));
-        });
-        ui.separator();
-        // Baris lagu
-        let t_now = ui.ctx().input(|i| i.time);
+        ui.add_space(10.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for (num, idx) in self.filtered_indices().iter().enumerate() {
-                let idx = *idx;
-                let is_current = self.current == Some(idx);
-                let (title, artist, album, dur_s) = {
-                    let t = &self.tracks[idx];
-                    (t.title.clone(), t.artist.clone(), t.album.clone(), t.duration_secs)
-                };
-                let (rect, resp) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), 56.0),
-                    egui::Sense::click(),
-                );
-                if resp.hovered() || is_current {
-                    ui.painter().rect_filled(rect, 4.0, SPOT_HOVER);
-                }
-                if resp.clicked() {
-                    self.play_index(idx);
-                }
-                let mut cui = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(rect)
-                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                );
-                cui.horizontal(|ui| {
-                    ui.add_space(20.0);
-                    if is_current {
-                        eq_bars(ui, t_now);
-                        ui.add_space(20.0);
-                    } else {
-                        ui.add_sized(
-                            egui::vec2(36.0, 0.0),
-                            egui::Label::new(
-                                egui::RichText::new(format!("{}", num + 1))
-                                    .size(14.0)
-                                    .color(SPOT_GRAY),
-                            ),
-                        );
-                    }
-                    let title_col = if is_current { SPOT_GREEN } else { SPOT_WHITE };
-                    let tw = (ui.available_width() - 340.0).max(120.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(tw, 56.0),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&title).size(15.0).color(title_col),
-                                )
-                                .truncate(),
-                            );
-                            let artist_txt =
-                                if artist.is_empty() { "Unknown Artist".to_string() } else { artist };
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(artist_txt).size(13.0).color(SPOT_GRAY),
-                                )
-                                .truncate(),
-                            );
-                        },
-                    );
-                    ui.add_space(8.0);
-                    ui.add_sized(
-                        egui::vec2(220.0, 0.0),
-                        egui::Label::new(
-                            egui::RichText::new(album).size(13.0).color(SPOT_GRAY),
-                        )
-                        .truncate(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(16.0);
-                        ui.label(
-                            egui::RichText::new(fmt_time(dur_s)).size(13.0).color(SPOT_GRAY),
-                        );
-                    });
-                });
-            }
+            ui.add_space(4.0);
+            self.show_track_table(ui, false);
         });
+    }
+
+    /// Strip kontrol 20% di bawah konten utama: transport terpusat + progress + volume.
+    fn show_control_strip(&mut self, ui: &mut egui::Ui) {
+        let ch = ui.available_height();
+        ui.add_space(((ch - 128.0) / 2.0).max(2.0));
+        // Baris 1: kontrol terpusat
+        ui.allocate_ui_with_layout(
+            egui::vec2(246.0, 46.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                let dim = SPOT_DIM;
+                let sh_col = if self.shuffle { SPOT_GREEN } else { dim };
+                if ui
+                    .add_sized(
+                        egui::vec2(38.0, 38.0),
+                        egui::Button::new(
+                            egui::RichText::new("🔀").size(17.0).color(sh_col),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text("Acak")
+                    .clicked()
+                {
+                    self.shuffle = !self.shuffle;
+                    if self.shuffle {
+                        self.ensure_shuffle_order();
+                    }
+                }
+                if ui
+                    .add_sized(
+                        egui::vec2(38.0, 38.0),
+                        egui::Button::new(
+                            egui::RichText::new("⏮").size(17.0).color(SPOT_GRAY),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text("Sebelumnya")
+                    .clicked()
+                {
+                    self.prev();
+                }
+                let play_glyph = if self.player.is_playing() {
+                    "⏸"
+                } else {
+                    "▶"
+                };
+                if ui
+                    .add_sized(
+                        egui::vec2(46.0, 46.0),
+                        egui::Button::new(
+                            egui::RichText::new(play_glyph)
+                                .size(19.0)
+                                .color(egui::Color32::BLACK),
+                        )
+                        .fill(SPOT_WHITE)
+                        .corner_radius(egui::CornerRadius::same(23)),
+                    )
+                    .on_hover_text("Putar / Jeda")
+                    .clicked()
+                {
+                    self.toggle_play();
+                }
+                if ui
+                    .add_sized(
+                        egui::vec2(38.0, 38.0),
+                        egui::Button::new(
+                            egui::RichText::new("⏭").size(17.0).color(SPOT_GRAY),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text("Berikutnya")
+                    .clicked()
+                {
+                    self.next();
+                }
+                let (rep_glyph, rep_col) = match self.repeat {
+                    RepeatMode::Off => ("🔁", dim),
+                    RepeatMode::All => ("🔁", SPOT_GREEN),
+                    RepeatMode::One => ("🔂", SPOT_GREEN),
+                };
+                if ui
+                    .add_sized(
+                        egui::vec2(38.0, 38.0),
+                        egui::Button::new(
+                            egui::RichText::new(rep_glyph).size(17.0).color(rep_col),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text("Ulangi: mati / semua / satu")
+                    .clicked()
+                {
+                    self.repeat = match self.repeat {
+                        RepeatMode::Off => RepeatMode::All,
+                        RepeatMode::All => RepeatMode::One,
+                        RepeatMode::One => RepeatMode::Off,
+                    };
+                }
+            },
+        );
+        ui.add_space(4.0);
+        // Baris 2: progress + waktu
+        let dur = self.player.duration().max(0.01);
+        let pos = self.player.position();
+        let bw = (ui.available_width() - 48.0).clamp(220.0, 440.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(bw, 22.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.add_sized(
+                    egui::vec2(44.0, 0.0),
+                    egui::Label::new(
+                        egui::RichText::new(fmt_time(pos)).size(11.0).color(SPOT_GRAY),
+                    ),
+                );
+                let sw = (bw - 104.0).max(60.0);
+                let mut p = pos;
+                if ui
+                    .add_sized(
+                        egui::vec2(sw, 0.0),
+                        egui::Slider::new(&mut p, 0.0..=dur)
+                            .show_value(false)
+                            .trailing_fill(true),
+                    )
+                    .drag_stopped()
+                {
+                    self.player.seek(p);
+                }
+                ui.add_sized(
+                    egui::vec2(44.0, 0.0),
+                    egui::Label::new(
+                        egui::RichText::new(fmt_time(dur)).size(11.0).color(SPOT_GRAY),
+                    ),
+                );
+            },
+        );
+        ui.add_space(4.0);
+        // Baris 3: volume + lirik + mini
+        ui.allocate_ui_with_layout(
+            egui::vec2(232.0, 28.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                ui.label(egui::RichText::new("🔊").size(15.0).color(SPOT_GRAY));
+                let mut vol = self.volume;
+                if ui
+                    .add_sized(
+                        egui::vec2(110.0, 0.0),
+                        egui::Slider::new(&mut vol, 0.0..=100.0).show_value(false),
+                    )
+                    .changed()
+                {
+                    self.volume = vol;
+                    self.player.set_volume(vol / 100.0);
+                }
+                let mic_col = if self.view == View::Lyrics {
+                    SPOT_GREEN
+                } else {
+                    SPOT_GRAY
+                };
+                if ui
+                    .add_sized(
+                        egui::vec2(34.0, 28.0),
+                        egui::Button::new(
+                            egui::RichText::new("🎤").size(16.0).color(mic_col),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text("Lirik")
+                    .clicked()
+                {
+                    self.view = View::Lyrics;
+                }
+                if ui
+                    .add_sized(
+                        egui::vec2(34.0, 28.0),
+                        egui::Button::new(
+                            egui::RichText::new("🧲").size(16.0).color(SPOT_GRAY),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text("Mini player")
+                    .clicked()
+                {
+                    let ctx = ui.ctx().clone();
+                    self.set_mini(&ctx, true);
+                }
+            },
+        );
     }
 
     /// Tampilan lirik ala Spotify: kolom tengah, baris aktif putih besar + karaoke.
@@ -833,10 +1067,10 @@ impl eframe::App for MusicApp {
             return;
         }
 
-        // ---- Sidebar kiri (ala Spotify) ----
+        // ---- Sidebar kiri: logo, nav, Your Library + tabel playlist ----
         egui::Panel::left("sidebar")
-            .resizable(true)
-            .default_size(300.0)
+            .resizable(false)
+            .default_size(360.0)
             .frame(egui::Frame::NONE.fill(SPOT_BLACK).inner_margin(16.0))
             .show(ui, |ui| {
                 // Footer menempel di bawah
@@ -847,17 +1081,17 @@ impl eframe::App for MusicApp {
                             .color(SPOT_DIM),
                     );
                     ui.horizontal(|ui| {
-                        if ui.small_button("\u{1F4C1}").on_hover_text("Folder Musik").clicked() {
+                        if ui.small_button("📁").on_hover_text("Folder Musik").clicked() {
                             if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                                 self.set_music_dir(dir);
                             }
                         }
-                        if ui.small_button("\u{1F504}").on_hover_text("Pindai Ulang").clicked() {
+                        if ui.small_button("🔄").on_hover_text("Pindai Ulang").clicked() {
                             if let Some(dir) = self.music_dir.clone() {
                                 self.set_music_dir(dir);
                             }
                         }
-                        if ui.small_button("\u{1F9F2}").on_hover_text("Mini player").clicked() {
+                        if ui.small_button("🧲").on_hover_text("Mini player").clicked() {
                             let ctx = ui.ctx().clone();
                             self.set_mini(&ctx, true);
                         }
@@ -865,279 +1099,105 @@ impl eframe::App for MusicApp {
                     ui.separator();
                 });
                 ui.label(
-                    egui::RichText::new("\u{1F3B5} Joni Music")
+                    egui::RichText::new("🎵 Joni Music")
                         .size(20.0)
                         .strong()
                         .color(SPOT_WHITE),
                 );
-                ui.add_space(14.0);
-                for (icon, label, v) in
-                    [("\u{1F3E0}", "Home", View::Playlist), ("\u{1F3A4}", "Lirik", View::Lyrics)]
-                {
-                    let active = self.view == v;
-                    let col = if active { SPOT_WHITE } else { SPOT_GRAY };
-                    if ui
-                        .add_sized(
-                            egui::vec2(ui.available_width(), 38.0),
-                            egui::Button::new(
-                                egui::RichText::new(format!("{icon}  {label}"))
-                                    .size(15.0)
-                                    .strong()
-                                    .color(col),
-                            )
-                            .frame(false),
-                        )
-                        .clicked()
-                    {
-                        self.goto_view(v);
-                    }
-                }
-                ui.add_space(6.0);
-                ui.separator();
                 ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    for (icon, label, v) in
+                        [("🏠", "Home", View::Playlist), ("🎤", "Lirik", View::Lyrics)]
+                    {
+                        let active = self.view == v;
+                        if ui
+                            .selectable_label(
+                                active,
+                                egui::RichText::new(format!("{icon}  {label}"))
+                                    .size(14.0)
+                                    .strong()
+                                    .color(if active { SPOT_WHITE } else { SPOT_GRAY }),
+                            )
+                            .clicked()
+                        {
+                            self.view = v;
+                        }
+                        ui.add_space(10.0);
+                    }
+                });
+                ui.add_space(8.0);
                 ui.label(
                     egui::RichText::new("Your Library")
                         .size(15.0)
                         .strong()
                         .color(SPOT_GRAY),
                 );
-                ui.add_space(6.0);
-                ui.text_edit_singleline(&mut self.search);
-                ui.add_space(6.0);
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for idx in self.filtered_indices() {
-                        let is_current = self.current == Some(idx);
-                        let display = self.tracks[idx].display();
-                        let (txt, col) = if is_current {
-                            (format!("\u{25B6} {display}"), SPOT_GREEN)
-                        } else {
-                            (display, SPOT_GRAY)
-                        };
-                        let resp = ui.add(
-                            egui::Label::new(egui::RichText::new(txt).size(13.0).color(col))
-                                .sense(egui::Sense::click())
-                                .truncate(),
+                ui.add_space(4.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.search)
+                        .hint_text("🔍 Cari lagu...")
+                        .desired_width(f32::INFINITY),
+                );
+                ui.add_space(10.0);
+                // Tombol play hijau + tabel playlist
+                ui.horizontal(|ui| {
+                    self.green_play_button(ui, 50.0);
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(format!("{} lagu", self.tracks.len()))
+                                .size(12.0)
+                                .color(SPOT_DIM),
                         );
-                        if resp.clicked() {
-                            self.play_index(idx);
-                        }
-                        ui.add_space(2.0);
-                    }
+                        ui.label(
+                            egui::RichText::new("Klik baris untuk memutar")
+                                .size(11.0)
+                                .color(SPOT_DIM),
+                        );
+                    });
+                });
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.show_track_table(ui, true);
                 });
             });
-        // ---- Konten utama (ala Spotify) ----
+        // ---- Konten utama: 80% lirik/playlist + 20% strip kontrol ----
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(SPOT_BG).inner_margin(egui::Margin::ZERO))
             .show(ui, |ui| {
-                // Top bar
-                ui.horizontal(|ui| {
-                    ui.add_space(12.0);
-                    if ui.small_button("\u{2039}").on_hover_text("Kembali").clicked() {
-                        self.go_back();
-                    }
-                    if ui.small_button("\u{203A}").on_hover_text("Maju").clicked() {
-                        self.go_forward();
-                    }
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            ui.add_space(16.0);
-                            ui.small(
-                                egui::RichText::new(format!(
-                                    "v{}",
-                                    env!("CARGO_PKG_VERSION")
-                                ))
-                                .color(SPOT_DIM),
-                            );
-                        },
+                let r = ui.available_rect_before_wrap();
+                let ch = (r.height() * 0.2).clamp(124.0, 190.0);
+                let split_y = r.max.y - ch;
+                let top_r =
+                    egui::Rect::from_min_max(r.min, egui::pos2(r.max.x, split_y));
+                let bot_r =
+                    egui::Rect::from_min_max(egui::pos2(r.min.x, split_y), r.max);
+                // Latar strip kontrol hitam
+                ui.painter().rect_filled(bot_r, 0.0, SPOT_BLACK);
+                {
+                    let mut top_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(top_r)
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
                     );
-                });
-                ui.add_space(4.0);
-                match self.view {
-                    View::Playlist => self.show_playlist(ui),
-                    View::Lyrics => self.show_lyrics_view(ui),
+                    match self.view {
+                        View::Playlist => self.show_playlist_page(&mut top_ui),
+                        View::Lyrics => self.show_lyrics_view(&mut top_ui),
+                    }
                 }
-            });
-        // ---- Bar Now Playing (ala Spotify) ----
-        egui::Panel::bottom("nowplaying")
-            .resizable(false)
-            .default_size(96.0)
-            .frame(egui::Frame::NONE.fill(SPOT_BLACK).inner_margin(12.0))
-            .show(ui, |ui| {
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    // Kiri: info lagu
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(300.0, 72.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            let (ar, _) =
-                                ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
-                            ui.painter().rect_filled(ar, 6.0, SPOT_CARD);
-                            ui.painter().text(
-                                ar.center(),
-                                egui::Align2::CENTER_CENTER,
-                                "\u{266A}",
-                                egui::FontId::proportional(26.0),
-                                SPOT_GRAY,
-                            );
-                            ui.add_space(10.0);
-                            match self.current.and_then(|i| self.tracks.get(i)) {
-                                Some(t) => {
-                                    ui.vertical(|ui| {
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(&t.title)
-                                                    .size(14.0)
-                                                    .color(SPOT_WHITE),
-                                            )
-                                            .truncate(),
-                                        );
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(if t.artist.is_empty() {
-                                                    "Unknown Artist"
-                                                } else {
-                                                    t.artist.as_str()
-                                                })
-                                                .size(12.0)
-                                                .color(SPOT_GRAY),
-                                            )
-                                            .truncate(),
-                                        );
-                                    });
-                                }
-                                None => {
-                                    ui.small(egui::RichText::new("Belum ada lagu").color(SPOT_GRAY));
-                                }
-                            }
-                        },
+                ui.painter().line_segment(
+                    [bot_r.left_top(), bot_r.right_top()],
+                    egui::Stroke::new(1.0, SPOT_HOVER),
+                );
+                {
+                    let mut bot_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(bot_r)
+                            .layout(egui::Layout::top_down(egui::Align::Center)),
                     );
-                    // Tengah: kontrol + progress
-                    let center_w = (ui.available_width() - 280.0).max(220.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(center_w, 72.0),
-                        egui::Layout::top_down(egui::Align::Center),
-                        |ui| {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 18.0;
-                                let dim = SPOT_DIM;
-                                let sh_col = if self.shuffle { SPOT_GREEN } else { dim };
-                                if ui
-                                    .button(egui::RichText::new("\u{1F500}").size(16.0).color(sh_col))
-                                    .on_hover_text("Acak")
-                                    .clicked()
-                                {
-                                    self.shuffle = !self.shuffle;
-                                    if self.shuffle {
-                                        self.ensure_shuffle_order();
-                                    }
-                                }
-                                if ui
-                                    .button(egui::RichText::new("\u{23EE}").size(16.0).color(SPOT_GRAY))
-                                    .clicked()
-                                {
-                                    self.prev();
-                                }
-                                let play_label = if self.player.is_playing() { "\u{23F8}" } else { "\u{25B6}" };
-                                if ui
-                                    .add_sized(
-                                        egui::vec2(40.0, 40.0),
-                                        egui::Button::new(
-                                            egui::RichText::new(play_label)
-                                                .size(18.0)
-                                                .color(egui::Color32::BLACK),
-                                        )
-                                        .fill(SPOT_WHITE)
-                                        .corner_radius(egui::CornerRadius::same(20)),
-                                    )
-                                    .clicked()
-                                {
-                                    self.toggle_play();
-                                }
-                                if ui
-                                    .button(egui::RichText::new("\u{23ED}").size(16.0).color(SPOT_GRAY))
-                                    .clicked()
-                                {
-                                    self.next();
-                                }
-                                let (rep_icon, rep_col) = match self.repeat {
-                                    RepeatMode::Off => ("\u{1F501}", dim),
-                                    RepeatMode::All => ("\u{1F501}", SPOT_GREEN),
-                                    RepeatMode::One => ("\u{1F502}", SPOT_GREEN),
-                                };
-                                if ui
-                                    .button(egui::RichText::new(rep_icon).size(16.0).color(rep_col))
-                                    .on_hover_text("Ulangi: mati / semua / satu")
-                                    .clicked()
-                                {
-                                    self.repeat = match self.repeat {
-                                        RepeatMode::Off => RepeatMode::All,
-                                        RepeatMode::All => RepeatMode::One,
-                                        RepeatMode::One => RepeatMode::Off,
-                                    };
-                                }
-                            });
-                            ui.add_space(2.0);
-                            ui.horizontal(|ui| {
-                                let dur = self.player.duration().max(0.01);
-                                let mut pos = self.player.position();
-                                ui.label(
-                                    egui::RichText::new(fmt_time(pos)).size(11.0).color(SPOT_GRAY),
-                                );
-                                let sw = (ui.available_width() - 80.0).max(80.0);
-                                if ui
-                                    .add_sized(
-                                        egui::vec2(sw, 0.0),
-                                        egui::Slider::new(&mut pos, 0.0..=dur)
-                                            .show_value(false)
-                                            .trailing_fill(true),
-                                    )
-                                    .drag_stopped()
-                                {
-                                    self.player.seek(pos);
-                                }
-                                ui.label(
-                                    egui::RichText::new(fmt_time(dur)).size(11.0).color(SPOT_GRAY),
-                                );
-                            });
-                        },
-                    );
-                    // Kanan: lirik, mini, volume
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let mut vol = self.volume;
-                        if ui
-                            .add_sized(
-                                egui::vec2(90.0, 0.0),
-                                egui::Slider::new(&mut vol, 0.0..=100.0).show_value(false),
-                            )
-                            .changed()
-                        {
-                            self.volume = vol;
-                            self.player.set_volume(vol / 100.0);
-                        }
-                        ui.label(egui::RichText::new("\u{1F50A}").size(14.0));
-                        if ui
-                            .button(egui::RichText::new("\u{1F9F2}").size(16.0))
-                            .on_hover_text("Mini player")
-                            .clicked()
-                        {
-                            let ctx = ui.ctx().clone();
-                            self.set_mini(&ctx, true);
-                        }
-                        let mic_col = if self.view == View::Lyrics { SPOT_GREEN } else { SPOT_GRAY };
-                        if ui
-                            .button(egui::RichText::new("\u{1F3A4}").size(16.0).color(mic_col))
-                            .on_hover_text("Lirik")
-                            .clicked()
-                        {
-                            self.goto_view(if self.view == View::Lyrics {
-                                View::Playlist
-                            } else {
-                                View::Lyrics
-                            });
-                        }
-                    });
-                });
+                    self.show_control_strip(&mut bot_ui);
+                }
             });
         // Refresh terus agar lirik & progress sinkron
         ui.ctx().request_repaint_after(Duration::from_millis(200));

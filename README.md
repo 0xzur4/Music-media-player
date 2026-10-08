@@ -22,14 +22,16 @@ Warna diekstrak dari CSS produksi Spotify (`#121212`, `#000000`,
 `#1ed760`, `#b3b3b3`, …) via skill REA `reverse-engineer-anything`.
 
 - **Sidebar kiri** (hitam): logo, navigasi Home / Lirik,
-  "Your Library" + pencarian + daftar lagu
-- **Konten utama** (`#121212`): top bar ‹ ›, tampilan Playlist
-  (header + tombol play hijau + tabel # | Judul | Album | Durasi,
-  baris aktif hijau + equalizer animasi) atau tampilan Lirik
-  (karaoke baris aktif putih besar, bar hijau, klik baris = lompat)
-- **Bar Now Playing** (hitam): info lagu + kontrol terpusat
-  🔀 ⏮ ▶/⏸ ⏭ 🔁 + progress + volume; 🎤 buka/tutup lirik
-- 🔀 = acak, 🔁 = ulangi (mati / semua / satu)
+  "Your Library" + pencarian, tombol play hijau besar +
+  tabel # | Judul | Album | Durasi (lagu diputar: teks hijau +
+  equalizer animasi, klik baris = putar)
+- **Konten utama** (`#121212`): 80% tampilan Lirik (karaoke baris
+  aktif putih besar, bar hijau, klik baris = lompat) atau tampilan
+  Playlist (header + tombol play hijau + tabel lega);
+  20% di bawahnya strip kontrol hitam: 🔀 ⏮ ▶/⏸ ⏭ 🔁 terpusat,
+  progress + waktu, volume, 🎤 (lirik), 🧲 (mini player)
+- 🔀 = acak, 🔁 = ulangi (mati / semua / satu); auto-lanjut
+  menghormati shuffle & repeat
 
 ## Build
 
