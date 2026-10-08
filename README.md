@@ -16,12 +16,20 @@ Music media player desktop untuk Windows, ditulis dengan Rust.
 - Playlist + pencarian, seek bar, kontrol volume, auto-lanjut ke lagu berikut
 - Tema gelap ala Spotify
 
-## Tata letak
+## Tata letak (clone Spotify)
 
-- **Kiri**: List Lagu (full height) + pencarian
-- **Tengah**: LIRIK karaoke besar
-- **Bawah**: Pengaturan Musik — info lagu, tombol ⏮ ▶/⏸ ⏭,
-  progress bar, volume, Folder Musik / Pindai Ulang / Mini / status
+Warna diekstrak dari CSS produksi Spotify (`#121212`, `#000000`,
+`#1ed760`, `#b3b3b3`, …) via skill REA `reverse-engineer-anything`.
+
+- **Sidebar kiri** (hitam): logo, navigasi Home / Lirik,
+  "Your Library" + pencarian + daftar lagu
+- **Konten utama** (`#121212`): top bar ‹ ›, tampilan Playlist
+  (header + tombol play hijau + tabel # | Judul | Album | Durasi,
+  baris aktif hijau + equalizer animasi) atau tampilan Lirik
+  (karaoke baris aktif putih besar, bar hijau, klik baris = lompat)
+- **Bar Now Playing** (hitam): info lagu + kontrol terpusat
+  🔀 ⏮ ▶/⏸ ⏭ 🔁 + progress + volume; 🎤 buka/tutup lirik
+- 🔀 = acak, 🔁 = ulangi (mati / semua / satu)
 
 ## Build
 
