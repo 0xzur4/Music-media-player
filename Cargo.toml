@@ -1,0 +1,28 @@
+[package]
+name = "joni-music"
+version = "1.2.2"
+edition = "2021"
+description = "Music media player (offline + online synced lyrics) untuk Windows"
+
+[dependencies]
+eframe = "0.36"
+egui = "0.36"
+rodio = "0.22"
+lofty = "0.22"
+ureq = { version = "3", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+walkdir = "2"
+anyhow = "1"
+rfd = "0.15"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[[bin]]
+name = "joni-music"
+path = "src/main.rs"

@@ -1,0 +1,4 @@
+/target/
+wix/*.msi
+wix/*.exe
+.DS_Store

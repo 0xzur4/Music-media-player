@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Joni Music"
+           Language="1033"
+           Version="1.2.2"
+           Manufacturer="Joni"
+           UpgradeCode="d67c9b9d-3880-40cb-ae03-68950f5d2d6b">
+    <Package InstallerVersion="200" Compressed="yes" InstallScope="perUser" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Joni Music is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="ProductFeature" Title="Joni Music" Level="1">
+      <ComponentRef Id="MainExecutable" />
+    </Feature>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="INSTALLFOLDER" Name="Joni Music">
+          <Component Id="MainExecutable" Guid="2a3503a4-a61d-430b-8e3d-716d9f55fe8d">
+            <File Id="JoniMusicEXE" Source="joni-music.exe" KeyPath="yes">
+              <Shortcut Id="StartMenuShortcut"
+                        Directory="ApplicationProgramsFolder"
+                        Name="Joni Music"
+                        WorkingDirectory="INSTALLFOLDER"
+                        Description="Music player dengan lirik tersinkron" />
+            </File>
+          </Component>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Joni Music" />
+      </Directory>
+    </Directory>
+  </Product>
+</Wix>
