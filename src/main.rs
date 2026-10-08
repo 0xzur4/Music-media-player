@@ -74,6 +74,7 @@ struct MusicApp {
     volume: f32,
     status_msg: String,
     lyric_scroll: f32,
+    lyric_viewport_h: f32,
     mini_mode: bool,
     view: View,
     shuffle: bool,
@@ -102,6 +103,7 @@ impl MusicApp {
             volume: 80.0,
             status_msg: String::from("Pilih folder musik untuk mulai."),
             lyric_scroll: 0.0,
+            lyric_viewport_h: 500.0,
             mini_mode: false,
             view: View::Lyrics,
             shuffle: false,
@@ -884,6 +886,9 @@ impl MusicApp {
                     let active = lyrics.active_index(pos);
                     let dur = self.player.duration();
                     let mut active_center_y: Option<f32> = None;
+                    // Ruang kosong di bawah harus >= setengah tinggi viewport
+                    // agar baris terakhir pun bisa di-scroll sampai tengah.
+                    let bottom_pad = self.lyric_viewport_h.max(240.0);
                     let output = egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .vertical_scroll_offset(self.lyric_scroll)
@@ -935,12 +940,18 @@ impl MusicApp {
                                         }
                                         ui.add_space(16.0);
                                     }
-                                    ui.add_space(120.0);
+                                    ui.add_space(bottom_pad);
                                 });
                             });
                         });
                     if let Some(cy) = active_center_y {
-                        let target = (cy - output.inner_rect.height() / 2.0).max(0.0);
+                        let vh = output.inner_rect.height();
+                        self.lyric_viewport_h = vh;
+                        // cy dalam koordinat layar -> ubah ke offset scroll:
+                        // target = posisi konten baris aktif - setengah viewport
+                        let target =
+                            (cy - output.inner_rect.min.y + self.lyric_scroll - vh / 2.0)
+                                .max(0.0);
                         let diff = target - self.lyric_scroll;
                         if diff.abs() < 0.5 {
                             self.lyric_scroll = target;
