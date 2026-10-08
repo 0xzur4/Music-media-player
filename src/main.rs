@@ -1073,14 +1073,100 @@ impl eframe::App for MusicApp {
             .default_size(360.0)
             .frame(egui::Frame::NONE.fill(SPOT_BLACK).inner_margin(16.0))
             .show(ui, |ui| {
-                // Footer menempel di bawah
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    ui.small(
-                        egui::RichText::new(self.status_msg.clone())
-                            .size(11.0)
-                            .color(SPOT_DIM),
+                // Split eksplisit: konten atas + footer 70px.
+                // (JANGAN pakai with_layout(bottom_up) di awal: kursor induk
+                // lompat ke bawah sehingga list lagu terdorong keluar layar.)
+                let r = ui.available_rect_before_wrap();
+                let footer_h = 70.0;
+                let content_r =
+                    egui::Rect::from_min_max(r.min, egui::pos2(r.max.x, r.max.y - footer_h));
+                let footer_r =
+                    egui::Rect::from_min_max(egui::pos2(r.min.x, r.max.y - footer_h), r.max);
+                {
+                    let mut cui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(content_r)
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
                     );
-                    ui.horizontal(|ui| {
+                    cui.label(
+                        egui::RichText::new("🎵 Joni Music")
+                            .size(20.0)
+                            .strong()
+                            .color(SPOT_WHITE),
+                    );
+                    cui.add_space(10.0);
+                    cui.horizontal(|ui| {
+                        for (icon, label, v) in
+                            [("🏠", "Home", View::Playlist), ("🎤", "Lirik", View::Lyrics)]
+                        {
+                            let active = self.view == v;
+                            if ui
+                                .selectable_label(
+                                    active,
+                                    egui::RichText::new(format!("{icon}  {label}"))
+                                        .size(14.0)
+                                        .strong()
+                                        .color(if active { SPOT_WHITE } else { SPOT_GRAY }),
+                                )
+                                .clicked()
+                            {
+                                self.view = v;
+                            }
+                            ui.add_space(10.0);
+                        }
+                    });
+                    cui.add_space(8.0);
+                    cui.label(
+                        egui::RichText::new("Your Library")
+                            .size(15.0)
+                            .strong()
+                            .color(SPOT_GRAY),
+                    );
+                    cui.add_space(4.0);
+                    cui.add(
+                        egui::TextEdit::singleline(&mut self.search)
+                            .hint_text("🔍 Cari lagu...")
+                            .desired_width(f32::INFINITY),
+                    );
+                    cui.add_space(10.0);
+                    // Tombol play hijau + info
+                    cui.horizontal(|ui| {
+                        self.green_play_button(ui, 50.0);
+                        ui.add_space(8.0);
+                        ui.vertical(|ui| {
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(format!("{} lagu", self.tracks.len()))
+                                    .size(12.0)
+                                    .color(SPOT_DIM),
+                            );
+                            ui.label(
+                                egui::RichText::new("Klik baris untuk memutar")
+                                    .size(11.0)
+                                    .color(SPOT_DIM),
+                            );
+                        });
+                    });
+                    cui.add_space(8.0);
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(&mut cui, |ui| {
+                            self.show_track_table(ui, true);
+                        });
+                }
+                // Garis pemisah + footer menempel di bawah
+                ui.painter().line_segment(
+                    [footer_r.left_top(), footer_r.right_top()],
+                    egui::Stroke::new(1.0, SPOT_HOVER),
+                );
+                {
+                    let mut fui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(footer_r)
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                    );
+                    fui.add_space(8.0);
+                    fui.horizontal(|ui| {
                         if ui.small_button("📁").on_hover_text("Folder Musik").clicked() {
                             if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                                 self.set_music_dir(dir);
@@ -1096,71 +1182,13 @@ impl eframe::App for MusicApp {
                             self.set_mini(&ctx, true);
                         }
                     });
-                    ui.separator();
-                });
-                ui.label(
-                    egui::RichText::new("🎵 Joni Music")
-                        .size(20.0)
-                        .strong()
-                        .color(SPOT_WHITE),
-                );
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    for (icon, label, v) in
-                        [("🏠", "Home", View::Playlist), ("🎤", "Lirik", View::Lyrics)]
-                    {
-                        let active = self.view == v;
-                        if ui
-                            .selectable_label(
-                                active,
-                                egui::RichText::new(format!("{icon}  {label}"))
-                                    .size(14.0)
-                                    .strong()
-                                    .color(if active { SPOT_WHITE } else { SPOT_GRAY }),
-                            )
-                            .clicked()
-                        {
-                            self.view = v;
-                        }
-                        ui.add_space(10.0);
-                    }
-                });
-                ui.add_space(8.0);
-                ui.label(
-                    egui::RichText::new("Your Library")
-                        .size(15.0)
-                        .strong()
-                        .color(SPOT_GRAY),
-                );
-                ui.add_space(4.0);
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.search)
-                        .hint_text("🔍 Cari lagu...")
-                        .desired_width(f32::INFINITY),
-                );
-                ui.add_space(10.0);
-                // Tombol play hijau + tabel playlist
-                ui.horizontal(|ui| {
-                    self.green_play_button(ui, 50.0);
-                    ui.add_space(8.0);
-                    ui.vertical(|ui| {
-                        ui.add_space(6.0);
-                        ui.label(
-                            egui::RichText::new(format!("{} lagu", self.tracks.len()))
-                                .size(12.0)
-                                .color(SPOT_DIM),
-                        );
-                        ui.label(
-                            egui::RichText::new("Klik baris untuk memutar")
-                                .size(11.0)
-                                .color(SPOT_DIM),
-                        );
-                    });
-                });
-                ui.add_space(8.0);
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.show_track_table(ui, true);
-                });
+                    fui.add_space(4.0);
+                    fui.small(
+                        egui::RichText::new(self.status_msg.clone())
+                            .size(11.0)
+                            .color(SPOT_DIM),
+                    );
+                }
             });
         // ---- Konten utama: 80% lirik/playlist + 20% strip kontrol ----
         egui::CentralPanel::default()
