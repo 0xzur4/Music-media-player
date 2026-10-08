@@ -1069,8 +1069,10 @@ impl eframe::App for MusicApp {
 
         // ---- Sidebar kiri: logo, nav, Your Library + tabel playlist ----
         egui::Panel::left("sidebar")
-            .resizable(false)
+            .resizable(true)
             .default_size(360.0)
+            .min_size(240.0)
+            .max_size(560.0)
             .frame(egui::Frame::NONE.fill(SPOT_BLACK).inner_margin(16.0))
             .show(ui, |ui| {
                 // Split eksplisit: konten atas + footer 70px.
