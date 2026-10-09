@@ -763,11 +763,13 @@ impl MusicApp {
                                     egui::RichText::new(fmt_time(pos)).size(11.0).color(SPOT_GRAY),
                                 ),
                             );
+                            // Slider egui menentukan lebar rel dari spacing().slider_width,
+                            // bukan dari add_sized — set langsung agar rel ikut memanjang.
                             let sw = (left_w - 88.0 - 28.0).max(60.0);
+                            ui.spacing_mut().slider_width = sw;
                             let mut p = pos;
                             if ui
-                                .add_sized(
-                                    egui::vec2(sw, 0.0),
+                                .add(
                                     egui::Slider::new(&mut p, 0.0..=dur)
                                         .show_value(false)
                                         .trailing_fill(true),
@@ -1291,4 +1293,77 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(MusicApp::new()))
         }),
     )
+}
+
+#[cfg(test)]
+mod progress_bar_tests {
+    // Tes headless: memastikan REL slider yang digambar benar-benar selebar
+    // yang diminta. egui::Slider mengabaikan lebar dari add_sized dan selalu
+    // memakai spacing().slider_width (default 100px) — regresi v1.6.7.
+    fn lebar_rel_terlebar(shapes: &[egui::epaint::ClippedShape]) -> Option<f32> {
+        shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::epaint::Shape::Rect(rs) => {
+                    let (w, h) = (rs.rect.width(), rs.rect.height());
+                    // Rel slider: tipis dan horizontal (bukan handle/latar).
+                    if h < 14.0 && w > 50.0 {
+                        Some(w)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+    }
+
+    fn gambar(draw: impl FnMut(&mut egui::Ui)) -> Vec<egui::epaint::ClippedShape> {
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1280.0, 800.0),
+        ));
+        let mut out = ctx.run_ui(raw, draw);
+        out.textures_delta.clear(); // headless: tidak ada GPU yang mengonsumsi tekstur
+        out.shapes
+    }
+
+    #[test]
+    fn rel_slider_memanjang_mengikuti_slider_width() {
+        let shapes = gambar(|ui| {
+            ui.spacing_mut().slider_width = 480.0;
+            let mut p = 10.0;
+            ui.add(
+                egui::Slider::new(&mut p, 0.0..=269.0)
+                    .show_value(false)
+                    .trailing_fill(true),
+            );
+        });
+        let w = lebar_rel_terlebar(&shapes).expect("rel slider tidak tergambar");
+        assert!(
+            (w - 480.0).abs() < 3.0,
+            "lebar rel = {w:.1}px, harusnya ~480px"
+        );
+    }
+
+    #[test]
+    fn pola_lama_add_sized_tidak_memanjangkan_rel() {
+        // Pola v1.6.7 (rusak): add_sized(480) — rel tetap 100px.
+        let shapes = gambar(|ui| {
+            let mut p = 10.0;
+            ui.add_sized(
+                egui::vec2(480.0, 0.0),
+                egui::Slider::new(&mut p, 0.0..=269.0)
+                    .show_value(false)
+                    .trailing_fill(true),
+            );
+        });
+        let w = lebar_rel_terlebar(&shapes).expect("rel slider tidak tergambar");
+        assert!(
+            (w - 100.0).abs() < 3.0,
+            "lebar rel pola lama = {w:.1}px, harusnya ~100px"
+        );
+    }
 }

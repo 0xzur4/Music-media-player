@@ -40,10 +40,10 @@ Hasilnya: `wix\JoniMusic-<versi>.msi`
 
 ### Naikkan versi rilis
 
-Dua tempat harus diganti agar sinkron (sekarang `1.3.0`):
+Dua tempat harus diganti agar sinkron (sekarang `1.6.7`):
 
 1. `Cargo.toml` → field `version`
-2. `wix/product.wxs` → atribut `Version="1.3.0"` pada `<Product ...>`
+2. `wix/product.wxs` → atribut `Version="1.6.7"` pada `<Product ...>`
 
 `Id="*"` pada Product berarti GUID baru dibuat otomatis tiap build,
 jadi MSI hasil rebuild tidak bentrok dengan versi lama.
