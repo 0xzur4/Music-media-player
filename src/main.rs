@@ -1285,6 +1285,27 @@ fn main() -> eframe::Result<()> {
             visuals.selection.bg_fill = egui::Color32::from_rgb(0x1e, 0xd7, 0x60);
             visuals.selection.stroke.color = egui::Color32::from_rgb(0x1e, 0xd7, 0x60);
             cc.egui_ctx.set_visuals(visuals);
+            // Font CJK (Jepang/Korea/China) sebagai fallback agar judul lagu
+            // dan lirik berhuruf hiragana/katakana/kanji/hangul/hanzi tampil benar.
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "noto_cjk_sc".to_owned(),
+                std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+                    "../assets/fonts/NotoSansCJK-sc.ttf"
+                ))),
+            );
+            fonts.font_data.insert(
+                "noto_cjk_kr".to_owned(),
+                std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+                    "../assets/fonts/NotoSansCJK-kr.ttf"
+                ))),
+            );
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                let entry = fonts.families.get_mut(&family).unwrap();
+                entry.push("noto_cjk_sc".to_owned());
+                entry.push("noto_cjk_kr".to_owned());
+            }
+            cc.egui_ctx.set_fonts(fonts);
             Ok(Box::new(MusicApp::new()))
         }),
     )
@@ -1443,5 +1464,46 @@ mod volume_popup_tests {
             (h - 110.0).abs() < 3.0,
             "tinggi rel vertikal = {h:.1}px, harusnya ~110px"
         );
+    }
+}
+
+#[cfg(test)]
+mod cjk_font_tests {
+    // Pastikan font CJK yang dibundel memuat glyph untuk tiap aksara yang didukung:
+    // hiragana, katakana, kanji/hanzi, dan hangul.
+    const SC: &[u8] = include_bytes!("../assets/fonts/NotoSansCJK-sc.ttf");
+    const KR: &[u8] = include_bytes!("../assets/fonts/NotoSansCJK-kr.ttf");
+
+    fn punya_glyph(font: &[u8], ch: char) -> bool {
+        ttf_parser::Face::from_slice(font, 0)
+            .map(|f| f.glyph_index(ch).is_some())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn font_sc_memuat_kana_dan_kanji() {
+        // Hiragana, katakana, tanda baca Jepang
+        for ch in [
+            'あ', 'い', 'う', 'ア', 'イ', 'ウ', 'ー', '。', '、', '「', '」', '・',
+        ] {
+            assert!(punya_glyph(SC, ch), "glyph hilang: {ch}");
+        }
+        // Kanji/hanzi umum (Jepang & China)
+        for ch in [
+            '日', '本', '語', '歌', '愛', '心', '漢', '字', '中', '國', '龍', '龜',
+        ] {
+            assert!(punya_glyph(SC, ch), "glyph hilang: {ch}");
+        }
+    }
+
+    #[test]
+    fn font_kr_memuat_hangul() {
+        for ch in ['한', '국', '어', '가', '나', '다', '김', '각', '힣', '뷁'] {
+            assert!(punya_glyph(KR, ch), "glyph hilang: {ch}");
+        }
+        // Jamo
+        for ch in ['\u{1100}', '\u{1161}', '\u{11A8}'] {
+            assert!(punya_glyph(KR, ch), "glyph hilang: U+{:04X}", ch as u32);
+        }
     }
 }

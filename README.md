@@ -1,62 +1,68 @@
 # Joni Music 🎵
 
-Music media player desktop untuk Windows, ditulis dengan Rust.
+A desktop music player for Windows, written in Rust.
 
-## Fitur
+## Features
 
-- **Offline**: putar lagu yang sudah didownload (mp3, flac, ogg, wav, m4a, aac, opus)
-- **Online**: lirik tersinkron (LRC) otomatis diambil dari internet (lrclib.net)
-  saat lagu pertama kali diputar, lalu **disimpan** — pemutaran berikutnya
-  lirik langsung tampil offline
-- **Lirik karaoke ala Spotify**: baris aktif besar & putih dengan bar hijau
-  berjalan, auto-scroll halus, klik baris lirik untuk lompat ke bagian itu
-- **Mini player**: saat minimize, berubah jadi jendela kecil transparan
-  always-on-top berisi judul + baris lirik aktif; bisa di-resize dan font
-  mengikuti ukuran jendela
-- Playlist + pencarian, seek bar, kontrol volume, auto-lanjut ke lagu berikut
-- Tema gelap ala Spotify
+- **Offline**: play your downloaded songs (mp3, flac, ogg, wav, m4a, aac, opus)
+- **Online**: synced lyrics (LRC) are fetched automatically from the internet
+  (lrclib.net) the first time a song plays, then **cached** — subsequent
+  plays show lyrics instantly, offline
+- **Spotify-style karaoke lyrics**: big white active line with a running green
+  bar, smooth auto-scroll, click any line to jump to that part
+- **Mini player**: minimizing switches to a small transparent always-on-top
+  window with the title + active lyric line; resizable, font scales with
+  the window
+- **CJK support**: Japanese (hiragana, katakana, kanji), Korean (hangul) and
+  Chinese characters render correctly in song titles and lyrics, via bundled
+  Noto Sans CJK subset fonts
+- Playlist + search, seek bar, volume control, auto-advance to the next song
+- Dark Spotify-like theme
 
-## Tata letak (clone Spotify)
+## Layout (Spotify clone)
 
-Warna diekstrak dari CSS produksi Spotify (`#121212`, `#000000`,
-`#1ed760`, `#b3b3b3`, …) via skill REA `reverse-engineer-anything`.
+Colors extracted from Spotify production CSS (`#121212`, `#000000`,
+`#1ed760`, `#b3b3b3`, …).
 
-- **Sidebar kiri** (hitam): logo, navigasi Home / Lirik,
-  "Your Library" + pencarian, tombol play hijau besar +
-  tabel # | Judul | Album | Durasi (lagu diputar: teks hijau +
-  equalizer animasi, klik baris = putar)
-- **Konten utama** (`#121212`): 80% tampilan Lirik (karaoke baris
-  aktif putih besar, bar hijau, klik baris = lompat) atau tampilan
-  Playlist (header + tombol play hijau + tabel lega);
-  20% di bawahnya strip kontrol hitam: 🔀 ⏮ ▶/⏸ ⏭ 🔁 terpusat,
-  progress + waktu, volume, 🎤 (lirik), 🧲 (mini player)
-- 🔀 = acak, 🔁 = ulangi (mati / semua / satu); auto-lanjut
-  menghormati shuffle & repeat
+- **Left sidebar** (black): logo, Home / Lyrics navigation,
+  "Your Library" + search, big green play button +
+  # | Title | Album | Duration table (playing song: green text +
+  animated equalizer, click a row to play)
+- **Main content** (`#121212`): top 80% shows the Lyrics view (karaoke with
+  big white active line, green bar, click a line to jump) or the Playlist
+  view (header + big green play button + roomy table);
+  bottom 20% is a black control strip: centered 🔀 ⏮ ▶/⏸ ⏭ 🔁,
+  progress + time, volume button (click to pop up a vertical slider),
+  🧲 (mini player)
+- 🔀 = shuffle, 🔁 = repeat (off / all / one); auto-advance
+  respects shuffle & repeat
 
 ## Build
 
-Butuh Rust stable + target Windows:
+Requires stable Rust + the Windows target:
 
 ```sh
 rustup target add x86_64-pc-windows-gnu
-# linker: x86_64-w64-mingw32-gcc (paket mingw-w64 di Linux, atau MSVC di Windows)
+# linker: x86_64-w64-mingw32-gcc (mingw-w64 package on Linux, or MSVC on Windows)
 cargo build --release --target x86_64-pc-windows-gnu
 ```
 
-Hasil: `target/x86_64-pc-windows-gnu/release/joni-music.exe`
+Output: `target/x86_64-pc-windows-gnu/release/joni-music.exe`
 
-## Installer MSI (opsional, via Linux)
+## MSI installer (optional, via Linux)
 
 ```sh
-# butuh: wixl (paket terpisah dari msitools)
+# requires: wixl (a separate package from msitools)
 cp target/x86_64-pc-windows-gnu/release/joni-music.exe wix/
-cd wix && wixl -o JoniMusic-<versi>.msi product.wxs
+cd wix && wixl -o JoniMusic-<version>.msi product.wxs
 ```
 
-## Struktur
+## Project structure
 
-- `src/main.rs` — UI (eframe/egui): playlist, kontrol, lirik, mini player
+- `src/main.rs` — UI (eframe/egui): playlist, controls, lyrics, mini player
 - `src/audio.rs` — playback (rodio)
-- `src/library.rs` — scan folder + baca metadata (lofty)
-- `src/lyrics.rs` — parse LRC, fetch & cache lirik (lrclib.net)
-- `wix/product.wxs` — definisi installer MSI
+- `src/library.rs` — folder scanning + metadata (lofty)
+- `src/lyrics.rs` — LRC parsing, lyric fetching & caching (lrclib.net)
+- `assets/fonts/` — bundled CJK fonts (Noto Sans CJK subsets for
+  Japanese/Chinese + Korean hangul)
+- `wix/product.wxs` — MSI installer definition

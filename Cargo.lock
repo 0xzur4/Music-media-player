@@ -1898,7 +1898,7 @@ dependencies = [
 
 [[package]]
 name = "joni-music"
-version = "1.6.9"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -1909,6 +1909,7 @@ dependencies = [
  "rodio",
  "serde",
  "serde_json",
+ "ttf-parser",
  "ureq",
  "walkdir",
 ]

@@ -1,6 +1,6 @@
 [package]
 name = "joni-music"
-version = "1.6.9"
+version = "1.7.0"
 edition = "2021"
 description = "Music media player (offline + online synced lyrics) untuk Windows"
 
@@ -26,3 +26,6 @@ strip = true
 [[bin]]
 name = "joni-music"
 path = "src/main.rs"
+
+[dev-dependencies]
+ttf-parser = "0.25"
