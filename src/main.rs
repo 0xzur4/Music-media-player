@@ -811,37 +811,32 @@ impl MusicApp {
                         self.set_mini(&ctx, true);
                     }
                     ui.spacing_mut().item_spacing.x = 14.0;
-                    let mut vol = self.volume;
-                    if ui
-                        .add_sized(
-                            egui::vec2(138.0, 0.0),
-                            egui::Slider::new(&mut vol, 0.0..=100.0).show_value(false),
-                        )
-                        .changed()
-                    {
-                        self.volume = vol;
-                        self.player.set_volume(vol / 100.0);
-                    }
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    ui.label(egui::RichText::new("🔊").size(15.0).color(SPOT_GRAY));
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    let mic_col = if self.view == View::Lyrics {
-                        SPOT_GREEN
-                    } else {
-                        SPOT_GRAY
-                    };
-                    if ui
+                    // Tombol volume: klik untuk memunculkan slider vertikal di atasnya.
+                    let vol_resp = ui
                         .add_sized(
                             egui::vec2(34.0, 28.0),
                             egui::Button::new(
-                                egui::RichText::new("🎤").size(16.0).color(mic_col),
+                                egui::RichText::new("🔊").size(16.0).color(SPOT_GRAY),
                             )
                             .frame(false),
                         )
-                        .on_hover_text("Lirik")
-                        .clicked()
-                    {
-                        self.view = View::Lyrics;
+                        .on_hover_text("Volume");
+                    let mut vol = self.volume;
+                    let popup = egui::Popup::from_toggle_button_response(&vol_resp)
+                        .align(egui::RectAlign::TOP_END)
+                        .gap(8.0)
+                        .show(|ui| {
+                            // Slider vertikal: slider_width menjadi tinggi rel.
+                            ui.spacing_mut().slider_width = 110.0;
+                            ui.add(
+                                egui::Slider::new(&mut vol, 0.0..=100.0)
+                                    .vertical()
+                                    .show_value(false),
+                            )
+                        });
+                    if popup.is_some_and(|p| p.inner.changed()) {
+                        self.volume = vol;
+                        self.player.set_volume(vol / 100.0);
                     }
                 },
             );
@@ -1364,6 +1359,89 @@ mod progress_bar_tests {
         assert!(
             (w - 100.0).abs() < 3.0,
             "lebar rel pola lama = {w:.1}px, harusnya ~100px"
+        );
+    }
+}
+
+#[cfg(test)]
+mod volume_popup_tests {
+    // Tes headless: klik tombol volume -> popup slider vertikal muncul di atasnya.
+    fn rel_vertikal_tertinggi(shapes: &[egui::epaint::ClippedShape]) -> Option<f32> {
+        shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::epaint::Shape::Rect(rs) => {
+                    let (w, h) = (rs.rect.width(), rs.rect.height());
+                    if w < 14.0 && h > 50.0 {
+                        Some(h)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+    }
+
+    #[test]
+    fn popup_volume_muncul_dengan_slider_vertikal() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let btn_center = std::cell::Cell::new(egui::Pos2::ZERO);
+
+        // Replika tombol volume + popup seperti di show_control_strip.
+        let mut gambar = |ui: &mut egui::Ui| {
+            let r = ui.add_sized(egui::vec2(34.0, 28.0), egui::Button::new("VOL"));
+            btn_center.set(r.rect.center());
+            let mut vol = 70.0;
+            egui::Popup::from_toggle_button_response(&r)
+                .align(egui::RectAlign::TOP_END)
+                .gap(8.0)
+                .show(|ui| {
+                    ui.spacing_mut().slider_width = 110.0;
+                    ui.add(
+                        egui::Slider::new(&mut vol, 0.0..=100.0)
+                            .vertical()
+                            .show_value(false),
+                    )
+                });
+        };
+        let mut frame = |events: Vec<egui::Event>| {
+            let mut raw = egui::RawInput::default();
+            raw.screen_rect = Some(screen);
+            raw.events = events;
+            let mut out = ctx.run_ui(raw, &mut gambar);
+            out.textures_delta.clear();
+            out.shapes
+        };
+
+        let s1 = frame(vec![]);
+        assert!(
+            rel_vertikal_tertinggi(&s1).is_none(),
+            "popup seharusnya tertutup sebelum tombol diklik"
+        );
+
+        let c = btn_center.get();
+        let klik = |pressed: bool| {
+            vec![
+                egui::Event::PointerMoved(c),
+                egui::Event::PointerButton {
+                    pos: c,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ]
+        };
+        let _s2 = frame(klik(true));
+        let _s3 = frame(klik(false));
+        let s4 = frame(vec![]);
+        let s3 = s4;
+
+        let h = rel_vertikal_tertinggi(&s3).expect("slider vertikal tidak muncul setelah klik");
+        assert!(
+            (h - 110.0).abs() < 3.0,
+            "tinggi rel vertikal = {h:.1}px, harusnya ~110px"
         );
     }
 }

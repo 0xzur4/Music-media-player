@@ -3,7 +3,7 @@
   <Product Id="*"
            Name="Joni Music"
            Language="1033"
-           Version="1.6.8"
+           Version="1.6.9"
            Manufacturer="Joni"
            UpgradeCode="d67c9b9d-3880-40cb-ae03-68950f5d2d6b">
     <Package InstallerVersion="200" Compressed="yes" InstallScope="perUser" />
