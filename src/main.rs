@@ -636,195 +636,212 @@ impl MusicApp {
 
     /// Strip kontrol 20% di bawah konten utama: transport terpusat + progress + volume.
     fn show_control_strip(&mut self, ui: &mut egui::Ui) {
+        // Mockup: grid 2 kolom — kiri 52% (kontrol terpusat + progress di bawahnya),
+        // kanan (lirik, volume, mini) rata kanan dan sejajar tengah secara vertikal.
         let ch = ui.available_height();
-        ui.add_space(((ch - 128.0) / 2.0).max(10.0));
-        // Baris 1: kontrol terpusat
-        ui.allocate_ui_with_layout(
-            egui::vec2(246.0, 46.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.spacing_mut().item_spacing.x = 12.0;
-                let dim = SPOT_DIM;
-                let sh_col = if self.shuffle { SPOT_GREEN } else { dim };
-                if ui
-                    .add_sized(
-                        egui::vec2(38.0, 38.0),
-                        egui::Button::new(
-                            egui::RichText::new("🔀").size(17.0).color(sh_col),
+        let block_h = 48.0 + 14.0 + 22.0; // kontrol + jeda + progress
+        ui.add_space(((ch - block_h) / 2.0).max(16.0));
+        let avail_w = ui.available_width();
+        let left_w = avail_w * 0.52;
+        let col_gap = 24.0;
+        let right_w = (avail_w - left_w - col_gap).max(160.0);
+        ui.horizontal(|ui| {
+            // ---- Kolom kiri: kontrol terpusat, progress di bawahnya ----
+            ui.allocate_ui_with_layout(
+                egui::vec2(left_w, block_h),
+                egui::Layout::top_down(egui::Align::Center),
+                |ui| {
+                    // Baris 1: kontrol
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(312.0, 48.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 28.0;
+                            let dim = SPOT_DIM;
+                            let sh_col = if self.shuffle { SPOT_GREEN } else { dim };
+                            if ui
+                                .add_sized(
+                                    egui::vec2(38.0, 38.0),
+                                    egui::Button::new(
+                                        egui::RichText::new("🔀").size(17.0).color(sh_col),
+                                    )
+                                    .frame(false),
+                                )
+                                .on_hover_text("Acak")
+                                .clicked()
+                            {
+                                self.shuffle = !self.shuffle;
+                                if self.shuffle {
+                                    self.ensure_shuffle_order();
+                                }
+                            }
+                            if ui
+                                .add_sized(
+                                    egui::vec2(38.0, 38.0),
+                                    egui::Button::new(
+                                        egui::RichText::new("\u{23EE}").size(17.0).color(SPOT_GRAY),
+                                    )
+                                    .frame(false),
+                                )
+                                .on_hover_text("Sebelumnya")
+                                .clicked()
+                            {
+                                self.prev();
+                            }
+                            let play_glyph = if self.player.is_playing() {
+                                "\u{23F8}"
+                            } else {
+                                "\u{25B6}"
+                            };
+                            if ui
+                                .add_sized(
+                                    egui::vec2(48.0, 48.0),
+                                    egui::Button::new(
+                                        egui::RichText::new(play_glyph)
+                                            .size(19.0)
+                                            .color(egui::Color32::BLACK),
+                                    )
+                                    .fill(SPOT_WHITE)
+                                    .corner_radius(egui::CornerRadius::same(24)),
+                                )
+                                .on_hover_text("Putar / Jeda")
+                                .clicked()
+                            {
+                                self.toggle_play();
+                            }
+                            if ui
+                                .add_sized(
+                                    egui::vec2(38.0, 38.0),
+                                    egui::Button::new(
+                                        egui::RichText::new("\u{23ED}").size(17.0).color(SPOT_GRAY),
+                                    )
+                                    .frame(false),
+                                )
+                                .on_hover_text("Berikutnya")
+                                .clicked()
+                            {
+                                self.next();
+                            }
+                            let (rep_glyph, rep_col) = match self.repeat {
+                                RepeatMode::Off => ("🔁", dim),
+                                RepeatMode::All => ("🔁", SPOT_GREEN),
+                                RepeatMode::One => ("🔂", SPOT_GREEN),
+                            };
+                            if ui
+                                .add_sized(
+                                    egui::vec2(38.0, 38.0),
+                                    egui::Button::new(
+                                        egui::RichText::new(rep_glyph).size(17.0).color(rep_col),
+                                    )
+                                    .frame(false),
+                                )
+                                .on_hover_text("Ulangi: mati / semua / satu")
+                                .clicked()
+                            {
+                                self.repeat = match self.repeat {
+                                    RepeatMode::Off => RepeatMode::All,
+                                    RepeatMode::All => RepeatMode::One,
+                                    RepeatMode::One => RepeatMode::Off,
+                                };
+                            }
+                        },
+                    );
+                    ui.add_space(14.0);
+                    // Baris 2: progress memenuhi lebar kolom kiri
+                    let dur = self.player.duration().max(0.01);
+                    let pos = self.player.position();
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(left_w, 22.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 14.0;
+                            ui.add_sized(
+                                egui::vec2(44.0, 0.0),
+                                egui::Label::new(
+                                    egui::RichText::new(fmt_time(pos)).size(11.0).color(SPOT_GRAY),
+                                ),
+                            );
+                            let sw = (left_w - 88.0 - 28.0).max(60.0);
+                            let mut p = pos;
+                            if ui
+                                .add_sized(
+                                    egui::vec2(sw, 0.0),
+                                    egui::Slider::new(&mut p, 0.0..=dur)
+                                        .show_value(false)
+                                        .trailing_fill(true),
+                                )
+                                .drag_stopped()
+                            {
+                                self.player.seek(p);
+                            }
+                            ui.add_sized(
+                                egui::vec2(44.0, 0.0),
+                                egui::Label::new(
+                                    egui::RichText::new(fmt_time(dur)).size(11.0).color(SPOT_GRAY),
+                                ),
+                            );
+                        },
+                    );
+                },
+            );
+            ui.add_space(col_gap);
+            // ---- Kolom kanan: rata kanan, tengah vertikal ----
+            ui.allocate_ui_with_layout(
+                egui::vec2(right_w, block_h),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.add_space(12.0); // padding kanan sesuai mockup
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if ui
+                        .add_sized(
+                            egui::vec2(34.0, 28.0),
+                            egui::Button::new(
+                                egui::RichText::new("🧲").size(16.0).color(SPOT_GRAY),
+                            )
+                            .frame(false),
                         )
-                        .frame(false),
-                    )
-                    .on_hover_text("Acak")
-                    .clicked()
-                {
-                    self.shuffle = !self.shuffle;
-                    if self.shuffle {
-                        self.ensure_shuffle_order();
+                        .on_hover_text("Mini player")
+                        .clicked()
+                    {
+                        let ctx = ui.ctx().clone();
+                        self.set_mini(&ctx, true);
                     }
-                }
-                if ui
-                    .add_sized(
-                        egui::vec2(38.0, 38.0),
-                        egui::Button::new(
-                            egui::RichText::new("⏮").size(17.0).color(SPOT_GRAY),
+                    ui.spacing_mut().item_spacing.x = 14.0;
+                    let mut vol = self.volume;
+                    if ui
+                        .add_sized(
+                            egui::vec2(138.0, 0.0),
+                            egui::Slider::new(&mut vol, 0.0..=100.0).show_value(false),
                         )
-                        .frame(false),
-                    )
-                    .on_hover_text("Sebelumnya")
-                    .clicked()
-                {
-                    self.prev();
-                }
-                let play_glyph = if self.player.is_playing() {
-                    "⏸"
-                } else {
-                    "▶"
-                };
-                if ui
-                    .add_sized(
-                        egui::vec2(46.0, 46.0),
-                        egui::Button::new(
-                            egui::RichText::new(play_glyph)
-                                .size(19.0)
-                                .color(egui::Color32::BLACK),
-                        )
-                        .fill(SPOT_WHITE)
-                        .corner_radius(egui::CornerRadius::same(23)),
-                    )
-                    .on_hover_text("Putar / Jeda")
-                    .clicked()
-                {
-                    self.toggle_play();
-                }
-                if ui
-                    .add_sized(
-                        egui::vec2(38.0, 38.0),
-                        egui::Button::new(
-                            egui::RichText::new("⏭").size(17.0).color(SPOT_GRAY),
-                        )
-                        .frame(false),
-                    )
-                    .on_hover_text("Berikutnya")
-                    .clicked()
-                {
-                    self.next();
-                }
-                let (rep_glyph, rep_col) = match self.repeat {
-                    RepeatMode::Off => ("🔁", dim),
-                    RepeatMode::All => ("🔁", SPOT_GREEN),
-                    RepeatMode::One => ("🔂", SPOT_GREEN),
-                };
-                if ui
-                    .add_sized(
-                        egui::vec2(38.0, 38.0),
-                        egui::Button::new(
-                            egui::RichText::new(rep_glyph).size(17.0).color(rep_col),
-                        )
-                        .frame(false),
-                    )
-                    .on_hover_text("Ulangi: mati / semua / satu")
-                    .clicked()
-                {
-                    self.repeat = match self.repeat {
-                        RepeatMode::Off => RepeatMode::All,
-                        RepeatMode::All => RepeatMode::One,
-                        RepeatMode::One => RepeatMode::Off,
+                        .changed()
+                    {
+                        self.volume = vol;
+                        self.player.set_volume(vol / 100.0);
+                    }
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.label(egui::RichText::new("🔊").size(15.0).color(SPOT_GRAY));
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let mic_col = if self.view == View::Lyrics {
+                        SPOT_GREEN
+                    } else {
+                        SPOT_GRAY
                     };
-                }
-            },
-        );
-        ui.add_space(4.0);
-        // Baris 2: progress + waktu
-        let dur = self.player.duration().max(0.01);
-        let pos = self.player.position();
-        // Baris 2 dibuat 2.25x panjang baris 1 (246px -> 553.5px)
-        let bw = (246.0f32 * 2.25).min(ui.available_width() - 48.0).max(220.0);
-        ui.allocate_ui_with_layout(
-            egui::vec2(bw, 22.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.add_sized(
-                    egui::vec2(44.0, 0.0),
-                    egui::Label::new(
-                        egui::RichText::new(fmt_time(pos)).size(11.0).color(SPOT_GRAY),
-                    ),
-                );
-                let sw = (bw - 104.0).max(60.0);
-                let mut p = pos;
-                if ui
-                    .add_sized(
-                        egui::vec2(sw, 0.0),
-                        egui::Slider::new(&mut p, 0.0..=dur)
-                            .show_value(false)
-                            .trailing_fill(true),
-                    )
-                    .drag_stopped()
-                {
-                    self.player.seek(p);
-                }
-                ui.add_sized(
-                    egui::vec2(44.0, 0.0),
-                    egui::Label::new(
-                        egui::RichText::new(fmt_time(dur)).size(11.0).color(SPOT_GRAY),
-                    ),
-                );
-            },
-        );
-        ui.add_space(4.0);
-        // Baris 3: volume + lirik + mini — terpusat sejajar baris 1 & 2
-        ui.allocate_ui_with_layout(
-            egui::vec2(232.0, 28.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                ui.label(egui::RichText::new("🔊").size(15.0).color(SPOT_GRAY));
-                let mut vol = self.volume;
-                if ui
-                    .add_sized(
-                        egui::vec2(110.0, 0.0),
-                        egui::Slider::new(&mut vol, 0.0..=100.0).show_value(false),
-                    )
-                    .changed()
-                {
-                    self.volume = vol;
-                    self.player.set_volume(vol / 100.0);
-                }
-                let mic_col = if self.view == View::Lyrics {
-                    SPOT_GREEN
-                } else {
-                    SPOT_GRAY
-                };
-                if ui
-                    .add_sized(
-                        egui::vec2(34.0, 28.0),
-                        egui::Button::new(
-                            egui::RichText::new("🎤").size(16.0).color(mic_col),
+                    if ui
+                        .add_sized(
+                            egui::vec2(34.0, 28.0),
+                            egui::Button::new(
+                                egui::RichText::new("🎤").size(16.0).color(mic_col),
+                            )
+                            .frame(false),
                         )
-                        .frame(false),
-                    )
-                    .on_hover_text("Lirik")
-                    .clicked()
-                {
-                    self.view = View::Lyrics;
-                }
-                // Gap khusus 5px antara tombol 🎤 dan 🧲
-                ui.spacing_mut().item_spacing.x = 5.0;
-                if ui
-                    .add_sized(
-                        egui::vec2(34.0, 28.0),
-                        egui::Button::new(
-                            egui::RichText::new("🧲").size(16.0).color(SPOT_GRAY),
-                        )
-                        .frame(false),
-                    )
-                    .on_hover_text("Mini player")
-                    .clicked()
-                {
-                    let ctx = ui.ctx().clone();
-                    self.set_mini(&ctx, true);
-                }
-            },
-        );
+                        .on_hover_text("Lirik")
+                        .clicked()
+                    {
+                        self.view = View::Lyrics;
+                    }
+                },
+            );
+        });
     }
 
     /// Tampilan lirik ala Spotify: kolom tengah, baris aktif putih besar + karaoke.
