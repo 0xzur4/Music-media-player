@@ -66,3 +66,7 @@ cd wix && wixl -o JoniMusic-<version>.msi product.wxs
 - `assets/fonts/` — bundled CJK fonts (Noto Sans CJK subsets for
   Japanese/Chinese + Korean hangul)
 - `wix/product.wxs` — MSI installer definition
+
+## License
+
+MIT — see [LICENSE](LICENSE).
