@@ -637,7 +637,7 @@ impl MusicApp {
     /// Strip kontrol 20% di bawah konten utama: transport terpusat + progress + volume.
     fn show_control_strip(&mut self, ui: &mut egui::Ui) {
         let ch = ui.available_height();
-        ui.add_space(((ch - 128.0) / 2.0).max(2.0));
+        ui.add_space(((ch - 128.0) / 2.0).max(10.0));
         // Baris 1: kontrol terpusat
         ui.allocate_ui_with_layout(
             egui::vec2(246.0, 46.0),
@@ -737,8 +737,8 @@ impl MusicApp {
         // Baris 2: progress + waktu
         let dur = self.player.duration().max(0.01);
         let pos = self.player.position();
-        // Baris 2 dibuat 25% lebih panjang dari baris 1 (246px)
-        let bw = (246.0f32 * 1.25).min(ui.available_width() - 48.0).max(220.0);
+        // Baris 2 dibuat 2.25x panjang baris 1 (246px -> 553.5px)
+        let bw = (246.0f32 * 2.25).min(ui.available_width() - 48.0).max(220.0);
         ui.allocate_ui_with_layout(
             egui::vec2(bw, 22.0),
             egui::Layout::left_to_right(egui::Align::Center),
@@ -771,29 +771,24 @@ impl MusicApp {
             },
         );
         ui.add_space(4.0);
-        // Baris 3: volume + lirik + mini — rata kanan, 25px dari tepi
+        // Baris 3: volume + lirik + mini — terpusat sejajar baris 1 & 2
         ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), 28.0),
-            egui::Layout::right_to_left(egui::Align::Center),
+            egui::vec2(232.0, 28.0),
+            egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                ui.add_space(25.0);
                 ui.spacing_mut().item_spacing.x = 10.0;
+                ui.label(egui::RichText::new("🔊").size(15.0).color(SPOT_GRAY));
+                let mut vol = self.volume;
                 if ui
                     .add_sized(
-                        egui::vec2(34.0, 28.0),
-                        egui::Button::new(
-                            egui::RichText::new("🧲").size(16.0).color(SPOT_GRAY),
-                        )
-                        .frame(false),
+                        egui::vec2(110.0, 0.0),
+                        egui::Slider::new(&mut vol, 0.0..=100.0).show_value(false),
                     )
-                    .on_hover_text("Mini player")
-                    .clicked()
+                    .changed()
                 {
-                    let ctx = ui.ctx().clone();
-                    self.set_mini(&ctx, true);
+                    self.volume = vol;
+                    self.player.set_volume(vol / 100.0);
                 }
-                // Gap khusus 5px antara tombol 🧲 dan 🎤
-                ui.spacing_mut().item_spacing.x = 5.0;
                 let mic_col = if self.view == View::Lyrics {
                     SPOT_GREEN
                 } else {
@@ -812,19 +807,22 @@ impl MusicApp {
                 {
                     self.view = View::Lyrics;
                 }
-                ui.spacing_mut().item_spacing.x = 10.0;
-                let mut vol = self.volume;
+                // Gap khusus 5px antara tombol 🎤 dan 🧲
+                ui.spacing_mut().item_spacing.x = 5.0;
                 if ui
                     .add_sized(
-                        egui::vec2(110.0, 0.0),
-                        egui::Slider::new(&mut vol, 0.0..=100.0).show_value(false),
+                        egui::vec2(34.0, 28.0),
+                        egui::Button::new(
+                            egui::RichText::new("🧲").size(16.0).color(SPOT_GRAY),
+                        )
+                        .frame(false),
                     )
-                    .changed()
+                    .on_hover_text("Mini player")
+                    .clicked()
                 {
-                    self.volume = vol;
-                    self.player.set_volume(vol / 100.0);
+                    let ctx = ui.ctx().clone();
+                    self.set_mini(&ctx, true);
                 }
-                ui.label(egui::RichText::new("🔊").size(15.0).color(SPOT_GRAY));
             },
         );
     }
