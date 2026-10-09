@@ -7,8 +7,7 @@ A desktop music player for Windows, written in Rust.
 Get the latest Windows build from the
 [Releases page](https://github.com/0xzur4/Music-media-player/releases):
 
-- `joni-music-<version>.exe` — portable, just run it (recommended)
-- `JoniMusic-<version>.msi` — installer, no admin needed
+- `joni-music-<version>.exe` — portable, just run it
 
 ## Features
 
