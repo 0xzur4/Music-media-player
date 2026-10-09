@@ -636,15 +636,17 @@ impl MusicApp {
 
     /// Strip kontrol 20% di bawah konten utama: transport terpusat + progress + volume.
     fn show_control_strip(&mut self, ui: &mut egui::Ui) {
-        // Mockup: grid 2 kolom — kiri 52% (kontrol terpusat + progress di bawahnya),
-        // kanan (lirik, volume, mini) rata kanan dan sejajar tengah secara vertikal.
+        // Grid 2 kolom: kiri (kontrol terpusat + progress) mengambil seluruh sisa ruang,
+        // kanan (lirik, volume, mini) lebar tetap, rata kanan, sejajar tengah vertikal.
         let ch = ui.available_height();
         let block_h = 48.0 + 14.0 + 22.0; // kontrol + jeda + progress
         ui.add_space(((ch - block_h) / 2.0).max(16.0));
         let avail_w = ui.available_width();
-        let left_w = avail_w * 0.52;
         let col_gap = 24.0;
-        let right_w = (avail_w - left_w - col_gap).max(160.0);
+        // Kolom kanan lebar tetap agar isinya tidak kepotong;
+        // kolom kiri (progress) memanjang mengikuti lebar jendela.
+        let right_w = 300.0f32.min(avail_w * 0.45).max(160.0);
+        let left_w = (avail_w - right_w - col_gap).max(180.0);
         ui.horizontal(|ui| {
             // ---- Kolom kiri: kontrol terpusat, progress di bawahnya ----
             ui.allocate_ui_with_layout(
