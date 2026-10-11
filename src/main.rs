@@ -953,7 +953,6 @@ impl MusicApp {
                     };
                     self.last_active = active;
                     let snap = jump >= 2;
-                    let dur = self.player.duration();
                     let mut active_center_y: Option<f32> = None;
                     // Ruang kosong di bawah harus >= setengah tinggi viewport
                     // agar baris terakhir pun bisa di-scroll sampai tengah.
@@ -994,18 +993,6 @@ impl MusicApp {
                                         }
                                         if is_active {
                                             active_center_y = Some(resp.rect.center().y);
-                                            let next_t = lyrics
-                                                .lines
-                                                .get(i + 1)
-                                                .map(|l| l.time)
-                                                .unwrap_or(dur.max(pos + 4.0));
-                                            let span = (next_t - line.time).max(0.5);
-                                            let p = ((pos - line.time) / span).clamp(0.0, 1.0);
-                                            let bar = egui::Rect::from_min_size(
-                                                egui::pos2(resp.rect.min.x, resp.rect.max.y - 2.0),
-                                                egui::vec2(resp.rect.width() * p as f32, 3.0),
-                                            );
-                                            ui.painter().rect_filled(bar, 1.5, SPOT_GREEN);
                                         }
                                         ui.add_space(16.0);
                                     }
@@ -1369,8 +1356,14 @@ impl eframe::App for MusicApp {
                     self.show_control_strip(&mut bot_ui);
                 }
             });
-        // Refresh terus agar lirik & progress sinkron
-        ui.ctx().request_repaint_after(Duration::from_millis(200));
+        // Refresh terus agar lirik & progress sinkron.
+        // Saat lagu diputar, repaint tiap frame supaya scroll lirik mulus;
+        // saat pause cukup 5x/detik untuk hemat CPU.
+        if self.player.is_playing() {
+            ui.ctx().request_repaint();
+        } else {
+            ui.ctx().request_repaint_after(Duration::from_millis(200));
+        }
     }
 }
 
