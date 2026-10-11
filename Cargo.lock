@@ -1898,7 +1898,7 @@ dependencies = [
 
 [[package]]
 name = "joni-music"
-version = "1.7.0"
+version = "1.7.5"
 dependencies = [
  "anyhow",
  "directories",

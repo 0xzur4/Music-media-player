@@ -44,8 +44,11 @@ fn parse_timestamp(s: &str) -> Option<f64> {
 }
 
 /// Parse teks LRC. Mendukung banyak timestamp dalam satu baris: [00:12.00][00:15.00]teks
+/// Juga mendukung tag [offset:+500] / [offset:-200] (mili-detik) yang
+/// menggeser semua timestamp.
 pub fn parse_lrc(text: &str) -> Lyrics {
     let mut lines: Vec<LyricLine> = Vec::new();
+    let mut offset_secs: f64 = 0.0;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() {
@@ -63,8 +66,15 @@ pub fn parse_lrc(text: &str) -> Lyrics {
                 None => break,
             };
             let tag = &rest[1..end];
-            // Tag metadata seperti [ar:..], [ti:..], [length:..] dilewati
-            if let Some(t) = parse_timestamp(tag) {
+            // Tag offset: [offset:+500] atau [offset:-200] dalam mili-detik
+            if let Some(ms) = tag
+                .strip_prefix("offset:")
+                .and_then(|v| v.trim().parse::<f64>().ok())
+            {
+                offset_secs = ms / 1000.0;
+            } else if let Some(t) = parse_timestamp(tag) {
+                // Tag metadata seperti [ar:..], [ti:..], [length:..] dilewati
+                // (parse_timestamp gagal untuk tag non-waktu)
                 times.push(t);
             }
             rest = rest[end + 1..].trim_start();
@@ -76,6 +86,11 @@ pub fn parse_lrc(text: &str) -> Lyrics {
         let text = rest.to_string();
         for t in times {
             lines.push(LyricLine { time: t, text: text.clone() });
+        }
+    }
+    if offset_secs != 0.0 {
+        for l in lines.iter_mut() {
+            l.time = (l.time + offset_secs).max(0.0);
         }
     }
     lines.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
@@ -104,6 +119,90 @@ struct LrclibResponse {
     synced_lyrics: Option<String>,
     #[serde(default)]
     plain_lyrics: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LrclibSearchItem {
+    #[serde(default)]
+    synced_lyrics: Option<String>,
+    #[serde(default)]
+    plain_lyrics: Option<String>,
+}
+
+fn user_agent() -> String {
+    format!("JoniMusic/{}", env!("CARGO_PKG_VERSION"))
+}
+
+fn http_get(url: &str) -> Option<ureq::http::Response<ureq::Body>> {
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(12)))
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+    agent.get(url).header("User-Agent", &user_agent()).call().ok()
+}
+
+fn nonempty(opt: Option<String>) -> Option<String> {
+    opt.filter(|s| !s.trim().is_empty())
+}
+
+/// Coba satu URL /api/get lrclib; kembalikan lirik (synced diutamakan).
+fn query_get(url: &str) -> Option<String> {
+    let mut resp = http_get(url)?;
+    if resp.status() != 200 {
+        return None;
+    }
+    let body: LrclibResponse = resp.body_mut().read_json().ok()?;
+    nonempty(body.synced_lyrics).or_else(|| nonempty(body.plain_lyrics))
+}
+
+/// Fallback: /api/search dengan query bebas; ambil hasil pertama yang
+/// punya lirik (synced diutamakan).
+fn query_search(artist: &str, title: &str) -> Option<String> {
+    let q = format!("{} {}", artist, title);
+    if q.trim().is_empty() {
+        return None;
+    }
+    let url = format!("https://lrclib.net/api/search?q={}", url_encode(&q));
+    let mut resp = http_get(&url)?;
+    if resp.status() != 200 {
+        return None;
+    }
+    let items: Vec<LrclibSearchItem> = resp.body_mut().read_json().ok()?;
+    // Utamakan hasil yang liriknya sinkron
+    for it in &items {
+        if let Some(s) = nonempty(it.synced_lyrics.clone()) {
+            return Some(s);
+        }
+    }
+    for it in &items {
+        if let Some(p) = nonempty(it.plain_lyrics.clone()) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Sederhanakan nama artis/judul agar pencarian lebih longgar:
+/// buang embel-embel seperti " (feat. X)", " [Live]", " - Remastered".
+fn normalize_query(s: &str) -> String {
+    let mut out = s.trim().to_string();
+    // Potong di " (" atau " [" paling akhir (biasanya feat./live/versi).
+    // Aman untuk judul CJK/Jepang/Korea karena butuh spasi sebelum kurung.
+    for marker in [" (", " ["] {
+        if let Some(i) = out.rfind(marker) {
+            out.truncate(i);
+        }
+    }
+    // Potong " - Remastered ..." (case-insensitive)
+    let lower = out.to_lowercase();
+    for marker in [" - remaster", " - deluxe", " - bonus"] {
+        if let Some(i) = lower.rfind(marker) {
+            out.truncate(i);
+            break;
+        }
+    }
+    out.trim().to_string()
 }
 
 fn cache_dir() -> Option<PathBuf> {
@@ -160,41 +259,55 @@ pub fn get_lyrics(track: &Track) -> (Option<Lyrics>, bool) {
 }
 
 fn fetch_online(track: &Track) -> Option<String> {
-    let mut url = format!(
+    let artist = track.artist.trim();
+    let title = track.title.trim();
+    let album = track.album.trim();
+    let n_artist = normalize_query(artist);
+    let n_title = normalize_query(title);
+
+    let mut urls: Vec<String> = Vec::new();
+    // 1. Paling spesifik: artis + judul + album + durasi
+    let mut u = format!(
         "https://lrclib.net/api/get?artist_name={}&track_name={}",
-        url_encode(&track.artist),
-        url_encode(&track.title)
+        url_encode(artist),
+        url_encode(title)
     );
-    if !track.album.is_empty() {
-        url.push_str(&format!("&album_name={}", url_encode(&track.album)));
+    if !album.is_empty() {
+        u.push_str(&format!("&album_name={}", url_encode(album)));
     }
     if track.duration_secs > 0.0 {
-        url.push_str(&format!("&duration={}", track.duration_secs.round() as u64));
+        u.push_str(&format!("&duration={}", track.duration_secs.round() as u64));
+    }
+    urls.push(u);
+    // 2. Tanpa album (tag album sering beda dengan database)
+    urls.push(format!(
+        "https://lrclib.net/api/get?artist_name={}&track_name={}",
+        url_encode(artist),
+        url_encode(title)
+    ));
+    // 3. Hanya judul (untuk file dengan tag artis kosong/aneh)
+    if !title.is_empty() {
+        urls.push(format!(
+            "https://lrclib.net/api/get?track_name={}",
+            url_encode(title)
+        ));
+    }
+    // 4. Versi yang dinormalisasi (tanpa feat./remastered/dsb)
+    if n_artist != artist || n_title != title {
+        urls.push(format!(
+            "https://lrclib.net/api/get?artist_name={}&track_name={}",
+            url_encode(&n_artist),
+            url_encode(&n_title)
+        ));
     }
 
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(12)))
-        .build();
-    let agent = ureq::Agent::new_with_config(config);
-    let resp: LrclibResponse = agent
-        .get(&url)
-        .header("User-Agent", "JoniMusic/1.0")
-        .call()
-        .ok()?
-        .into_body()
-        .read_json::<LrclibResponse>()
-        .ok()?;
-    if let Some(s) = resp.synced_lyrics {
-        if !s.trim().is_empty() {
+    for url in &urls {
+        if let Some(s) = query_get(url) {
             return Some(s);
         }
     }
-    if let Some(p) = resp.plain_lyrics {
-        if !p.trim().is_empty() {
-            return Some(p);
-        }
-    }
-    None
+    // 5. Fallback terakhir: pencarian fuzzy
+    query_search(&n_artist, &n_title)
 }
 
 #[cfg(test)]
@@ -230,5 +343,45 @@ mod tests {
         let lyrics = parse_lrc("just some\nplain lyrics\n");
         assert!(!lyrics.synced);
         assert!(lyrics.lines.is_empty());
+    }
+
+    #[test]
+    fn offset_tag_shifts_timestamps() {
+        let lrc = "[offset:+500]\n[00:10.00] hi\n";
+        let lyrics = parse_lrc(lrc);
+        assert!(lyrics.synced);
+        assert!((lyrics.lines[0].time - 10.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn offset_tag_negative_clamped_at_zero() {
+        let lrc = "[offset:-2000]\n[00:01.00] hi\n[00:10.00] ho\n";
+        let lyrics = parse_lrc(lrc);
+        assert!((lyrics.lines[0].time - 0.0).abs() < 0.01);
+        assert!((lyrics.lines[1].time - 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn offset_tag_itself_not_a_lyric_line() {
+        let lrc = "[offset:+300]\n[ar:Someone]\n[00:05.00] line\n";
+        let lyrics = parse_lrc(lrc);
+        assert_eq!(lyrics.lines.len(), 1);
+        assert!((lyrics.lines[0].time - 5.3).abs() < 0.01);
+    }
+
+    #[test]
+    fn normalize_strips_feat_and_remaster() {
+        assert_eq!(normalize_query("Song (feat. Someone)"), "Song");
+        assert_eq!(normalize_query("Song [Live]"), "Song");
+        assert_eq!(normalize_query("Song - Remastered 2015"), "Song");
+        assert_eq!(normalize_query("  Plain Title  "), "Plain Title");
+    }
+
+    #[test]
+    fn normalize_keeps_cjk_titles() {
+        // Judul CJK/Jepang/Korea tanpa spasi+kurung tidak boleh terpotong
+        assert_eq!(normalize_query("夜に駆ける"), "夜に駆ける");
+        assert_eq!(normalize_query("봄여름가을겨울"), "봄여름가을겨울");
+        assert_eq!(normalize_query("晴天"), "晴天");
     }
 }

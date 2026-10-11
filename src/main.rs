@@ -5,6 +5,7 @@ mod library;
 mod lyrics;
 
 use audio::Player;
+use audio::{output_device_names, DEFAULT_DEVICE_LABEL};
 use eframe::egui;
 use library::Track;
 use lyrics::{get_lyrics, Lyrics};
@@ -75,6 +76,11 @@ struct MusicApp {
     status_msg: String,
     lyric_scroll: f32,
     lyric_viewport_h: f32,
+    /// Baris lirik aktif pada frame sebelumnya (untuk snap scroll lagu cepat).
+    last_active: Option<usize>,
+    /// Perangkat output audio pilihan pengguna; None = default sistem.
+    audio_device: Option<String>,
+    device_names: Vec<String>,
     mini_mode: bool,
     view: View,
     shuffle: bool,
@@ -104,6 +110,9 @@ impl MusicApp {
             status_msg: String::from("Pilih folder musik untuk mulai."),
             lyric_scroll: 0.0,
             lyric_viewport_h: 500.0,
+            last_active: None,
+            audio_device: None,
+            device_names: output_device_names(),
             mini_mode: false,
             view: View::Lyrics,
             shuffle: false,
@@ -113,7 +122,19 @@ impl MusicApp {
         };
         app.player.set_volume(0.8);
 
-        if let Some(dir) = load_music_dir() {
+        let (dir, audio_device) = load_config();
+        if let Some(dev) = audio_device {
+            match app.player.set_output_device(Some(&dev)) {
+                Ok(()) => {
+                    app.audio_device = Some(dev);
+                }
+                Err(e) => {
+                    app.status_msg =
+                        format!("Perangkat audio tersimpan tidak tersedia ({e}); pakai default.");
+                }
+            }
+        }
+        if let Some(dir) = dir {
             app.set_music_dir(dir);
         }
         app
@@ -121,7 +142,7 @@ impl MusicApp {
 
     fn set_music_dir(&mut self, dir: PathBuf) {
         self.music_dir = Some(dir.clone());
-        save_music_dir(&dir);
+        save_config(&self.music_dir, &self.audio_device);
         self.tracks.clear();
         self.current = None;
         self.player.stop();
@@ -132,6 +153,25 @@ impl MusicApp {
             let tracks = library::scan(&dir);
             let _ = tx.send(tracks);
         });
+    }
+
+    /// Ganti perangkat output audio dan simpan preferensinya.
+    fn set_audio_device(&mut self, device: Option<String>) {
+        let label = device.as_deref();
+        match self.player.set_output_device(label) {
+            Ok(()) => {
+                self.audio_device = device;
+                save_config(&self.music_dir, &self.audio_device);
+                let shown = self
+                    .audio_device
+                    .as_deref()
+                    .unwrap_or(DEFAULT_DEVICE_LABEL);
+                self.status_msg = format!("Output audio: {shown}");
+            }
+            Err(e) => {
+                self.status_msg = format!("Gagal ganti perangkat audio: {e}");
+            }
+        }
     }
 
     fn play_index(&mut self, idx: usize) {
@@ -146,6 +186,7 @@ impl MusicApp {
                     self.ensure_shuffle_order();
                 }
                 self.lyric_scroll = 0.0;
+                self.last_active = None;
                 self.status_msg = format!("Memutar: {}", track.display());
                 // Ambil lirik di background: cache dulu, kalau belum ada unduh online.
                 self.lyric_state = LyricState::Loading;
@@ -903,6 +944,15 @@ impl MusicApp {
                     });
                 } else {
                     let active = lyrics.active_index(pos);
+                    // Lagu cepat: kalau baris aktif lompat >= 2 baris dalam
+                    // satu frame, scroll langsung snap (tanpa smoothing)
+                    // agar lirik tidak tertinggal.
+                    let jump = match (self.last_active, active) {
+                        (Some(a), Some(b)) => (b as isize - a as isize).unsigned_abs(),
+                        _ => 0,
+                    };
+                    self.last_active = active;
+                    let snap = jump >= 2;
                     let dur = self.player.duration();
                     let mut active_center_y: Option<f32> = None;
                     // Ruang kosong di bawah harus >= setengah tinggi viewport
@@ -972,7 +1022,7 @@ impl MusicApp {
                             (cy - output.inner_rect.min.y + self.lyric_scroll - vh / 2.0)
                                 .max(0.0);
                         let diff = target - self.lyric_scroll;
-                        if diff.abs() < 0.5 {
+                        if snap || diff.abs() < 0.5 {
                             self.lyric_scroll = target;
                         } else {
                             self.lyric_scroll += diff * 0.12;
@@ -1044,25 +1094,40 @@ fn config_path() -> Option<PathBuf> {
         .map(|d| d.config_dir().join("config.json"))
 }
 
-fn load_music_dir() -> Option<PathBuf> {
-    let p = config_path()?;
-    let text = std::fs::read_to_string(p).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let dir = v.get("music_dir")?.as_str()?;
-    let pb = PathBuf::from(dir);
-    if pb.is_dir() {
-        Some(pb)
-    } else {
-        None
-    }
+fn load_config() -> (Option<PathBuf>, Option<String>) {
+    let p = match config_path() {
+        Some(p) => p,
+        None => return (None, None),
+    };
+    let text = match std::fs::read_to_string(p) {
+        Ok(t) => t,
+        Err(_) => return (None, None),
+    };
+    let v: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return (None, None),
+    };
+    let dir = v
+        .get("music_dir")
+        .and_then(|s| s.as_str())
+        .map(PathBuf::from)
+        .filter(|pb| pb.is_dir());
+    let audio_device = v
+        .get("audio_device")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+    (dir, audio_device)
 }
 
-fn save_music_dir(dir: &PathBuf) {
+fn save_config(dir: &Option<PathBuf>, audio_device: &Option<String>) {
     if let Some(p) = config_path() {
         if let Some(parent) = p.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let v = serde_json::json!({ "music_dir": dir.to_string_lossy() });
+        let v = serde_json::json!({
+            "music_dir": dir.as_ref().map(|d| d.to_string_lossy()),
+            "audio_device": audio_device,
+        });
         let _ = std::fs::write(p, v.to_string());
     }
 }
@@ -1212,6 +1277,51 @@ impl eframe::App for MusicApp {
                         if ui.small_button("🧲").on_hover_text("Mini player").clicked() {
                             let ctx = ui.ctx().clone();
                             self.set_mini(&ctx, true);
+                        }
+                        // Pemilih perangkat output audio: headset/earphone yang baru
+                        // dicolok sering tidak jadi default otomatis, jadi suara
+                        // tetap keluar dari speaker laptop. Pilih manual di sini.
+                        let sel = self
+                            .audio_device
+                            .as_deref()
+                            .unwrap_or(DEFAULT_DEVICE_LABEL);
+                        let shown: String = sel.chars().take(16).collect();
+                        let combo = egui::ComboBox::from_id_salt("audio_device")
+                            .selected_text(
+                                egui::RichText::new(format!("🔈 {shown}")).size(11.0),
+                            )
+                            .width(170.0);
+                        let resp = combo.show_ui(ui, |ui| {
+                            // Refresh daftar tiap popup dibuka agar perangkat
+                            // yang baru dicolok ikut muncul.
+                            self.device_names = output_device_names();
+                            let mut picked: Option<String> = None;
+                            if ui
+                                .selectable_label(
+                                    self.audio_device.is_none(),
+                                    DEFAULT_DEVICE_LABEL,
+                                )
+                                .on_hover_text("Ikuti default sistem")
+                                .clicked()
+                            {
+                                picked = Some(String::new());
+                            }
+                            for name in self.device_names.clone() {
+                                if ui
+                                    .selectable_label(
+                                        self.audio_device.as_deref() == Some(name.as_str()),
+                                        &name,
+                                    )
+                                    .clicked()
+                                {
+                                    picked = Some(name);
+                                }
+                            }
+                            picked
+                        });
+                        if let Some(Some(p)) = resp.inner {
+                            let device = if p.is_empty() { None } else { Some(p) };
+                            self.set_audio_device(device);
                         }
                     });
                     fui.add_space(4.0);

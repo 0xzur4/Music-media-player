@@ -23,6 +23,10 @@ Get the latest Windows build from the
 - **CJK support**: Japanese (hiragana, katakana, kanji), Korean (hangul) and
   Chinese characters render correctly in song titles and lyrics, via bundled
   Noto Sans CJK subset fonts
+- **Audio output selection**: pick headset / earphones / speakers manually
+  from the sidebar footer (🔈) — useful when a newly plugged device does not
+  become the system default automatically; the song continues from the same
+  position on the new device
 - Playlist + search, seek bar, volume control, auto-advance to the next song
 - Dark Spotify-like theme
 
