@@ -105,6 +105,8 @@ struct MusicApp {
     /// Buffer nama playlist baru + toggle tampil input.
     new_playlist_name: String,
     show_playlist_input: bool,
+    /// Otomatis masuk mini player saat jendela di-minimize.
+    auto_mini: bool,
 }
 
 impl MusicApp {
@@ -146,10 +148,12 @@ impl MusicApp {
             active_playlist: None,
             new_playlist_name: String::new(),
             show_playlist_input: false,
+            auto_mini: true,
         };
         app.player.set_volume(0.8);
 
-        let (dir, audio_device) = load_config();
+        let (dir, audio_device, auto_mini) = load_config();
+        app.auto_mini = auto_mini;
         if let Some(dev) = audio_device {
             match app.player.set_output_device(Some(&dev)) {
                 Ok(()) => {
@@ -170,7 +174,7 @@ impl MusicApp {
 
     fn set_music_dir(&mut self, dir: PathBuf) {
         self.music_dir = Some(dir.clone());
-        save_config(&self.music_dir, &self.audio_device);
+        save_config(&self.music_dir, &self.audio_device, self.auto_mini);
         self.tracks.clear();
         self.current = None;
         self.player.stop();
@@ -189,7 +193,7 @@ impl MusicApp {
         match self.player.set_output_device(label) {
             Ok(()) => {
                 self.audio_device = device;
-                save_config(&self.music_dir, &self.audio_device);
+                save_config(&self.music_dir, &self.audio_device, self.auto_mini);
                 let shown = self
                     .audio_device
                     .as_deref()
@@ -359,24 +363,26 @@ impl MusicApp {
     }
 
     /// Pindah tampilan utama (dengan riwayat untuk ‹ ›).
-    /// Masuk/keluar mode mini player: jendela kecil transparan always-on-top.
+    /// Masuk/keluar mode mini player: jendela kecil borderless transparan
+    /// always-on-top. Drag manual via StartDrag dari area judul.
     fn set_mini(&mut self, ctx: &egui::Context, mini: bool) {
         self.mini_mode = mini;
         if mini {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Transparent(true));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
                 egui::WindowLevel::AlwaysOnTop,
             ));
             ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(
-                220.0, 110.0,
+                240.0, 130.0,
             )));
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                400.0, 215.0,
+                380.0, 210.0,
             )));
         } else {
             ctx.send_viewport_cmd(egui::ViewportCommand::Transparent(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
                 egui::WindowLevel::Normal,
             ));
@@ -386,62 +392,113 @@ impl MusicApp {
         }
     }
 
-    /// Tampilan mini player: judul + kontrol, font mengikuti ukuran jendela.
+    /// Tampilan mini player: borderless, draggable, cover + kontrol lengkap.
     fn show_mini(&mut self, ui: &mut egui::Ui) {
-        // Latar semi-transparan (viewport sudah transparent di mode mini)
         let bg = ui.max_rect();
-        ui.painter()
-            .rect_filled(bg, 14.0, egui::Color32::from_rgba_unmultiplied(12, 12, 12, 175));
+        let bg_col = egui::Color32::from_rgba_unmultiplied(14, 14, 16, 220);
+        ui.painter().rect_filled(bg, 14.0, bg_col);
+        // Border halus.
+        ui.painter().rect_stroke(
+            bg,
+            14.0,
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 18)),
+            egui::StrokeKind::Outside,
+        );
 
-        let w = ui.available_width();
-        let title_size = (w / 15.0).clamp(13.0, 34.0);
-        let artist_size = (w / 24.0).clamp(10.0, 18.0);
-        let pos = self.player.position();
+        let pad = 12.0;
+        let content_r = bg.shrink(pad);
+        let mut cui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(content_r)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
 
-        ui.vertical_centered(|ui| {
-            ui.add_space(6.0);
-            match self.current.and_then(|i| self.tracks.get(i)) {
-                Some(t) => {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&t.title)
-                                .size(title_size)
-                                .strong()
-                                .color(egui::Color32::WHITE),
-                        )
-                        .truncate(),
-                    );
-                    if !t.artist.is_empty() {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(&t.artist)
-                                    .size(artist_size)
-                                    .color(egui::Color32::from_gray(160)),
-                            )
-                            .truncate(),
-                        );
-                    }
-                }
-                None => {
-                    ui.label(
-                        egui::RichText::new("Joni Music")
-                            .size(title_size)
-                            .color(egui::Color32::WHITE),
-                    );
-                }
+        let w = content_r.width();
+        let title_size = (w / 16.0).clamp(13.0, 26.0);
+        let artist_size = (w / 26.0).clamp(10.0, 15.0);
+
+        // ---- Baris atas: cover + judul/artis (area drag) ----
+        let top_h = 56.0;
+        let (drag_rect, drag_resp) =
+            cui.allocate_exact_size(egui::vec2(w, top_h), egui::Sense::click_and_drag());
+        // Cover art.
+        let cover_sz = 48.0;
+        if let Some(tex) = &self.cover_texture {
+            cui.painter().image(
+                tex.id(),
+                egui::Rect::from_min_size(drag_rect.min, egui::vec2(cover_sz, cover_sz)),
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        } else {
+            cui.painter().rect_filled(
+                egui::Rect::from_min_size(drag_rect.min, egui::vec2(cover_sz, cover_sz)),
+                6.0,
+                egui::Color32::from_rgb(0x28, 0x28, 0x2e),
+            );
+            cui.painter().text(
+                egui::Rect::from_min_size(drag_rect.min, egui::vec2(cover_sz, cover_sz)).center(),
+                egui::Align2::CENTER_CENTER,
+                "♪",
+                egui::FontId::proportional(22.0),
+                SPOT_DIM,
+            );
+        }
+        // Judul + artis di kanan cover (digambar manual agar dalam drag_rect).
+        let text_x = drag_rect.min.x + cover_sz + 10.0;
+        let text_w = drag_rect.width() - cover_sz - 10.0;
+        if let Some(t) = self.current.and_then(|i| self.tracks.get(i)) {
+            cui.painter().text(
+                egui::pos2(text_x, drag_rect.min.y + 6.0),
+                egui::Align2::LEFT_TOP,
+                &t.title,
+                egui::FontId::proportional(title_size),
+                egui::Color32::WHITE,
+            );
+            if !t.artist.is_empty() {
+                cui.painter().text(
+                    egui::pos2(text_x, drag_rect.min.y + 8.0 + title_size),
+                    egui::Align2::LEFT_TOP,
+                    &t.artist,
+                    egui::FontId::proportional(artist_size),
+                    egui::Color32::from_gray(160),
+                );
             }
-            // Baris lirik yang sedang dinyanyikan (karaoke mini)
-            if let LyricState::Loaded { lyrics, .. } = &self.lyric_state {
-                if lyrics.synced {
-                    if let Some(i) = lyrics.active_index(pos) {
-                        if let Some(line) = lyrics.lines.get(i) {
-                            let lsize = (w / 20.0).clamp(11.0, 24.0);
-                            let ltext = if line.text.is_empty() {
-                                "♪".to_string()
-                            } else {
-                                line.text.clone()
-                            };
-                            ui.add_space(2.0);
+        } else {
+            cui.painter().text(
+                egui::pos2(text_x, drag_rect.min.y + 12.0),
+                egui::Align2::LEFT_TOP,
+                "Joni Music",
+                egui::FontId::proportional(title_size),
+                egui::Color32::WHITE,
+            );
+        }
+        // Catatan: teks tidak di-truncate manual; area cukup untuk judul wajar.
+        let _ = text_w;
+        // Drag jendela dari area ini.
+        if drag_resp.drag_started() {
+            cui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+        if drag_resp.hovered() {
+            cui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+
+        cui.add_space(6.0);
+
+        // ---- Baris lirik karaoke ----
+        let pos = self.player.position();
+        if let LyricState::Loaded { lyrics, .. } = &self.lyric_state {
+            if lyrics.synced {
+                if let Some(i) = lyrics.active_index(pos) {
+                    if let Some(line) = lyrics.lines.get(i) {
+                        let lsize = (w / 22.0).clamp(11.0, 18.0);
+                        let ltext = if line.text.is_empty() {
+                            "♪".to_string()
+                        } else {
+                            line.text.clone()
+                        };
+                        cui.vertical_centered(|ui| {
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(ltext)
@@ -451,45 +508,140 @@ impl MusicApp {
                                 )
                                 .truncate(),
                             );
-                        }
+                        });
+                        cui.add_space(4.0);
                     }
                 }
             }
-            ui.add_space(4.0);
-            // Progress tipis
-            let dur = self.player.duration().max(0.01);
-            let p = (self.player.position() / dur).clamp(0.0, 1.0) as f32;
-            let bar_w = ui.available_width() - 20.0;
-            let (br, _) =
-                ui.allocate_exact_size(egui::vec2(bar_w, 3.0), egui::Sense::hover());
-            ui.painter().rect_filled(
-                br,
-                1.5,
-                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 40),
+        }
+
+        // ---- Progress bar yang bisa di-seek ----
+        let dur = self.player.duration().max(0.01);
+        let p = (pos / dur).clamp(0.0, 1.0) as f32;
+        let bar_h = 14.0; // area sentuh lega
+        let (br, bar_resp) =
+            cui.allocate_exact_size(egui::vec2(w, bar_h), egui::Sense::click_and_drag());
+        let thick = if bar_resp.hovered() || bar_resp.dragged() { 5.0 } else { 3.0 };
+        let cy = br.center().y;
+        let track_rect =
+            egui::Rect::from_min_max(egui::pos2(br.min.x, cy - thick / 2.0), egui::pos2(br.max.x, cy + thick / 2.0));
+        cui.painter().rect_filled(
+            track_rect,
+            thick / 2.0,
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 40),
+        );
+        let fill_w = track_rect.width() * p;
+        if fill_w > 0.5 {
+            cui.painter().rect_filled(
+                egui::Rect::from_min_size(track_rect.min, egui::vec2(fill_w, thick)),
+                thick / 2.0,
+                SPOT_GREEN,
             );
-            ui.painter().rect_filled(
-                egui::Rect::from_min_size(br.min, egui::vec2(br.width() * p, 3.0)),
-                1.5,
-                egui::Color32::from_rgb(29, 185, 84),
+            // Knob saat hover/drag.
+            if bar_resp.hovered() || bar_resp.dragged() {
+                cui.painter().circle_filled(
+                    egui::pos2(track_rect.min.x + fill_w, cy),
+                    6.0,
+                    egui::Color32::WHITE,
+                );
+            }
+        }
+        if bar_resp.dragged() || bar_resp.clicked() {
+            if let Some(mpos) = bar_resp.interact_pointer_pos() {
+                let ratio = ((mpos.x - track_rect.min.x) / track_rect.width()).clamp(0.0, 1.0);
+                self.player.seek(ratio as f64 * dur);
+            }
+        }
+        if bar_resp.hovered() {
+            cui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        // Waktu.
+        cui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(fmt_time(pos))
+                    .size(10.0)
+                    .color(SPOT_DIM),
             );
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui.button("⏮").clicked() {
-                    self.prev();
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(fmt_time(dur))
+                        .size(10.0)
+                        .color(SPOT_DIM),
+                );
+            });
+        });
+
+        cui.add_space(4.0);
+
+        // ---- Baris kontrol ----
+        cui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if ui
+                .add_sized(egui::vec2(36.0, 32.0), egui::Button::new("⏮").frame(false))
+                .on_hover_text("Sebelumnya")
+                .clicked()
+            {
+                self.prev();
+            }
+            let play_label = if self.player.is_playing() { "⏸" } else { "▶" };
+            if ui
+                .add_sized(
+                    egui::vec2(44.0, 36.0),
+                    egui::Button::new(egui::RichText::new(play_label).size(17.0))
+                        .fill(SPOT_GREEN)
+                        .corner_radius(18.0),
+                )
+                .on_hover_text("Putar / Jeda")
+                .clicked()
+            {
+                if self.player.has_track() {
+                    self.player.toggle();
+                } else if !self.tracks.is_empty() {
+                    self.play_index(0);
                 }
-                let play_label = if self.player.is_playing() { "⏸" } else { "▶" };
-                if ui.button(egui::RichText::new(play_label).size(18.0)).clicked() {
-                    if self.player.has_track() {
-                        self.player.toggle();
-                    } else if !self.tracks.is_empty() {
-                        self.play_index(0);
-                    }
+            }
+            if ui
+                .add_sized(egui::vec2(36.0, 32.0), egui::Button::new("⏭").frame(false))
+                .on_hover_text("Berikutnya")
+                .clicked()
+            {
+                self.next();
+            }
+            ui.separator();
+            // Volume mini: tombol + popup slider vertikal.
+            let vol_resp = ui
+                .add_sized(egui::vec2(32.0, 28.0), egui::Button::new("🔊").frame(false))
+                .on_hover_text("Volume");
+            let mut vol = self.volume;
+            let popup = egui::Popup::from_toggle_button_response(&vol_resp)
+                .align(egui::RectAlign::TOP_END)
+                .gap(8.0)
+                .show(|ui| {
+                    ui.spacing_mut().slider_width = 100.0;
+                    ui.add(
+                        egui::Slider::new(&mut vol, 0.0..=100.0)
+                            .vertical()
+                            .show_value(false),
+                    )
+                });
+            if popup.is_some_and(|p| p.inner.changed()) {
+                self.volume = vol;
+                self.player.set_volume(vol / 100.0);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Tutup aplikasi langsung dari mini player.
+                if ui
+                    .add_sized(egui::vec2(30.0, 28.0), egui::Button::new("✕").frame(false))
+                    .on_hover_text("Tutup Joni Music")
+                    .clicked()
+                {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
-                if ui.button("⏭").clicked() {
-                    self.next();
-                }
-                ui.separator();
-                if ui.button("⛶").on_hover_text("Kembali ke tampilan penuh").clicked() {
+                if ui
+                    .add_sized(egui::vec2(30.0, 28.0), egui::Button::new("⛶").frame(false))
+                    .on_hover_text("Kembali ke tampilan penuh")
+                    .clicked()
+                {
                     let ctx = ui.ctx().clone();
                     self.set_mini(&ctx, false);
                 }
@@ -1274,18 +1426,18 @@ fn config_path() -> Option<PathBuf> {
         .map(|d| d.config_dir().join("config.json"))
 }
 
-fn load_config() -> (Option<PathBuf>, Option<String>) {
+fn load_config() -> (Option<PathBuf>, Option<String>, bool) {
     let p = match config_path() {
         Some(p) => p,
-        None => return (None, None),
+        None => return (None, None, true),
     };
     let text = match std::fs::read_to_string(p) {
         Ok(t) => t,
-        Err(_) => return (None, None),
+        Err(_) => return (None, None, true),
     };
     let v: serde_json::Value = match serde_json::from_str(&text) {
         Ok(v) => v,
-        Err(_) => return (None, None),
+        Err(_) => return (None, None, true),
     };
     let dir = v
         .get("music_dir")
@@ -1296,10 +1448,11 @@ fn load_config() -> (Option<PathBuf>, Option<String>) {
         .get("audio_device")
         .and_then(|s| s.as_str())
         .map(|s| s.to_string());
-    (dir, audio_device)
+    let auto_mini = v.get("auto_mini").and_then(|b| b.as_bool()).unwrap_or(true);
+    (dir, audio_device, auto_mini)
 }
 
-fn save_config(dir: &Option<PathBuf>, audio_device: &Option<String>) {
+fn save_config(dir: &Option<PathBuf>, audio_device: &Option<String>, auto_mini: bool) {
     if let Some(p) = config_path() {
         if let Some(parent) = p.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -1307,6 +1460,7 @@ fn save_config(dir: &Option<PathBuf>, audio_device: &Option<String>) {
         let v = serde_json::json!({
             "music_dir": dir.as_ref().map(|d| d.to_string_lossy()),
             "audio_device": audio_device,
+            "auto_mini": auto_mini,
         });
         let _ = std::fs::write(p, v.to_string());
     }
@@ -1327,9 +1481,9 @@ impl eframe::App for MusicApp {
             self.advance();
         }
 
-        // Minimize -> ubah jadi mini player kecil transparan
+        // Minimize -> ubah jadi mini player (bisa dimatikan di pengaturan).
         let minimized = ui.ctx().input(|i| i.viewport().minimized);
-        if minimized == Some(true) && !self.mini_mode {
+        if minimized == Some(true) && !self.mini_mode && self.auto_mini {
             let ctx = ui.ctx().clone();
             self.set_mini(&ctx, true);
         }
@@ -1588,6 +1742,31 @@ impl eframe::App for MusicApp {
                             let ctx = ui.ctx().clone();
                             self.set_mini(&ctx, true);
                         }
+                        // Pengaturan: auto-mini saat minimize.
+                        let set_resp = ui
+                            .small_button("⚙")
+                            .on_hover_text("Pengaturan");
+                        egui::Popup::from_toggle_button_response(&set_resp)
+                            .align(egui::RectAlign::TOP_START)
+                            .gap(8.0)
+                            .show(|ui| {
+                                ui.set_min_width(220.0);
+                                let mut am = self.auto_mini;
+                                if ui
+                                    .checkbox(
+                                        &mut am,
+                                        "Otomatis jadi mini player\nsaat jendela di-minimize",
+                                    )
+                                    .changed()
+                                {
+                                    self.auto_mini = am;
+                                    save_config(
+                                        &self.music_dir,
+                                        &self.audio_device,
+                                        self.auto_mini,
+                                    );
+                                }
+                            });
                         // Pemilih perangkat output audio: headset/earphone yang baru
                         // dicolok sering tidak jadi default otomatis, jadi suara
                         // tetap keluar dari speaker laptop. Pilih manual di sini.
