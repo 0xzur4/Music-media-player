@@ -87,6 +87,9 @@ struct MusicApp {
     repeat: RepeatMode,
     shuffle_order: Vec<usize>,
     shuffle_pos: usize,
+    /// Lebar sidebar kiri (px). Diubah via drag handle kustom di tepi kanan
+    /// sidebar; 240..560, default 360.
+    sidebar_width: f32,
 }
 
 impl MusicApp {
@@ -119,6 +122,7 @@ impl MusicApp {
             repeat: RepeatMode::Off,
             shuffle_order: Vec::new(),
             shuffle_pos: 0,
+            sidebar_width: 360.0,
         };
         app.player.set_volume(0.8);
 
@@ -1150,11 +1154,12 @@ impl eframe::App for MusicApp {
         }
 
         // ---- Sidebar kiri: logo, nav, Your Library + tabel playlist ----
+        // Lebar dikendalikan manual via `sidebar_width` + drag handle kustom
+        // di bawah (bukan Panel::resizable bawaan egui yang handle-nya
+        // tak terlihat & sulit digrab dengan Frame::NONE).
         egui::Panel::left("sidebar")
-            .resizable(true)
-            .default_size(360.0)
-            .min_size(240.0)
-            .max_size(560.0)
+            .resizable(false)
+            .exact_size(self.sidebar_width)
             .frame(egui::Frame::NONE.fill(SPOT_BLACK).inner_margin(16.0))
             .show(ui, |ui| {
                 // Split eksplisit: konten atas + footer 70px.
@@ -1356,6 +1361,47 @@ impl eframe::App for MusicApp {
                     self.show_control_strip(&mut bot_ui);
                 }
             });
+        // ---- Drag handle kustom di tepi kanan sidebar ----
+        // Strip 12px yang selalu terlihat samar & menyala saat hover/drag.
+        // (Menggantikan Panel::resizable bawaan yang handle-nya tak kasat
+        // mata dengan Frame::NONE sehingga pengguna mengira tidak bisa.)
+        {
+            let win_h = ui.max_rect().max.y;
+            let x = self.sidebar_width;
+            let strip = egui::Rect::from_min_max(
+                egui::pos2(x - 6.0, 0.0),
+                egui::pos2(x + 6.0, win_h),
+            );
+            let resp = ui.interact(
+                strip,
+                egui::Id::new("sidebar_resize"),
+                egui::Sense::drag(),
+            );
+            if resp.dragged() {
+                if let Some(p) = resp.interact_pointer_pos() {
+                    // Sisakan minimal 200px untuk panel tengah.
+                    let max_w = (ui.max_rect().width() - 200.0).max(240.0);
+                    self.sidebar_width = p.x.clamp(240.0, 560.0).min(max_w);
+                }
+            }
+            if resp.hovered() || resp.dragged() {
+                ui.ctx()
+                    .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            // Garis vertikal: samar saat idle, hijau terang saat hover/drag.
+            let line_col = if resp.dragged() {
+                SPOT_GREEN
+            } else if resp.hovered() {
+                SPOT_GREEN_HOVER
+            } else {
+                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 28)
+            };
+            let lw = if resp.hovered() || resp.dragged() { 2.5 } else { 1.0 };
+            ui.painter().line_segment(
+                [egui::pos2(x, 0.0), egui::pos2(x, win_h)],
+                egui::Stroke::new(lw, line_col),
+            );
+        }
         // Refresh terus agar lirik & progress sinkron.
         // Saat lagu diputar, repaint tiap frame supaya scroll lirik mulus;
         // saat pause cukup 5x/detik untuk hemat CPU.
@@ -1409,6 +1455,16 @@ fn main() -> eframe::Result<()> {
                 entry.push("noto_cjk_kr".to_owned());
             }
             cc.egui_ctx.set_fonts(fonts);
+            // Monitor thread: bangunkan UI tiap 500ms agar pengecekan
+            // `player.finished()` -> `advance()` tetap jalan walau repaint
+            // loop utama terhambat (mis. setelah minimize di Windows).
+            // Tanpa ini, lagu yang selesai saat UI tertidur tidak lanjut
+            // ke lagu berikutnya.
+            let rep_ctx = cc.egui_ctx.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                rep_ctx.request_repaint();
+            });
             Ok(Box::new(MusicApp::new()))
         }),
     )
