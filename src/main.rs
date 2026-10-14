@@ -1501,24 +1501,8 @@ impl eframe::App for MusicApp {
                         cui.add_space(4.0);
                     }
                     cui.add_space(6.0);
-                    // Tombol play hijau + info
-                    cui.horizontal(|ui| {
-                        self.green_play_button(ui, 50.0);
-                        ui.add_space(8.0);
-                        ui.vertical(|ui| {
-                            ui.add_space(6.0);
-                            ui.label(
-                                egui::RichText::new(format!("{} lagu", self.tracks.len()))
-                                    .size(12.0)
-                                    .color(SPOT_DIM),
-                            );
-                            ui.label(
-                                egui::RichText::new("Klik baris untuk memutar")
-                                    .size(11.0)
-                                    .color(SPOT_DIM),
-                            );
-                        });
-                    });
+                    // (Tombol play hijau + info dihapus 2026-10-15 atas permintaan zura:
+                    //  duplikat dari tombol play di control strip bawah.)
                     cui.add_space(8.0);
                     // Now playing: cover art + judul/artis lagu aktif.
                     if let Some(t) = self.current.and_then(|i| self.tracks.get(i)) {
