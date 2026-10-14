@@ -3,6 +3,7 @@
 mod audio;
 mod library;
 mod lyrics;
+mod playlist;
 
 use audio::Player;
 use audio::{output_device_names, DEFAULT_DEVICE_LABEL};
@@ -90,6 +91,20 @@ struct MusicApp {
     /// Lebar sidebar kiri (px). Diubah via drag handle kustom di tepi kanan
     /// sidebar; 240..560, default 360.
     sidebar_width: f32,
+    /// Tampilkan popup equalizer.
+    show_eq: bool,
+    /// Nama preset EQ aktif ("Kustom" bila diubah manual).
+    eq_preset: String,
+    /// Texture cover art lagu aktif + path pemiliknya.
+    cover_texture: Option<egui::TextureHandle>,
+    cover_for: Option<PathBuf>,
+    /// Daftar playlist pengguna (persist di playlists.json).
+    playlists: Vec<playlist::Playlist>,
+    /// Index playlist aktif; None = tampilkan semua lagu.
+    active_playlist: Option<usize>,
+    /// Buffer nama playlist baru + toggle tampil input.
+    new_playlist_name: String,
+    show_playlist_input: bool,
 }
 
 impl MusicApp {
@@ -123,6 +138,14 @@ impl MusicApp {
             shuffle_order: Vec::new(),
             shuffle_pos: 0,
             sidebar_width: 360.0,
+            show_eq: false,
+            eq_preset: String::from("Flat"),
+            cover_texture: None,
+            cover_for: None,
+            playlists: Vec::new(),
+            active_playlist: None,
+            new_playlist_name: String::new(),
+            show_playlist_input: false,
         };
         app.player.set_volume(0.8);
 
@@ -141,6 +164,7 @@ impl MusicApp {
         if let Some(dir) = dir {
             app.set_music_dir(dir);
         }
+        app.playlists = playlist::load();
         app
     }
 
@@ -634,6 +658,42 @@ impl MusicApp {
                     egui::RichText::new(fmt_time(dur_s)).size(12.0).color(SPOT_GRAY),
                 );
             });
+            // Klik kanan: tambah ke playlist / hapus dari playlist aktif.
+            let mut add_to: Option<usize> = None;
+            let mut remove_from_active = false;
+            resp.context_menu(|ui| {
+                if !self.playlists.is_empty() {
+                    ui.label(
+                        egui::RichText::new("Tambah ke playlist:")
+                            .size(12.0)
+                            .color(SPOT_GRAY),
+                    );
+                    for (pi, pl) in self.playlists.iter().enumerate() {
+                        if ui.button(format!("🎵 {}", pl.name)).clicked() {
+                            add_to = Some(pi);
+                        }
+                    }
+                    ui.separator();
+                }
+                if self.active_playlist.is_some()
+                    && ui.button("🗑 Hapus dari playlist ini").clicked()
+                {
+                    remove_from_active = true;
+                }
+            });
+            if let Some(pi) = add_to {
+                let path = self.tracks[idx].path.clone();
+                if self.playlists[pi].add(&path) {
+                    playlist::save(&self.playlists);
+                }
+            }
+            if remove_from_active {
+                if let Some(pi) = self.active_playlist {
+                    let path = self.tracks[idx].path.clone();
+                    self.playlists[pi].remove(&path);
+                    playlist::save(&self.playlists);
+                }
+            }
         }
         if let Some(i) = clicked_idx {
             self.play_index(i);
@@ -841,6 +901,25 @@ impl MusicApp {
                 |ui| {
                     ui.add_space(12.0); // padding kanan sesuai mockup
                     ui.spacing_mut().item_spacing.x = 8.0;
+                    // Tombol equalizer: popup 5 slider vertikal + preset.
+                    let eq_col = if self.eq_preset == "Flat" {
+                        SPOT_GRAY
+                    } else {
+                        SPOT_GREEN
+                    };
+                    if ui
+                        .add_sized(
+                            egui::vec2(34.0, 28.0),
+                            egui::Button::new(
+                                egui::RichText::new("🎚").size(16.0).color(eq_col),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text("Equalizer")
+                        .clicked()
+                    {
+                        self.show_eq = !self.show_eq;
+                    }
                     if ui
                         .add_sized(
                             egui::vec2(34.0, 28.0),
@@ -886,6 +965,103 @@ impl MusicApp {
                 },
             );
         });
+    }
+
+    /// Window equalizer: 5 slider vertikal + preset.
+    fn show_eq_window(&mut self, ctx: &egui::Context) {
+        if !self.show_eq {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("🎚 Equalizer")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.spacing_mut().slider_width = 90.0;
+                    for band in 0..5 {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new(crate::audio::EQ_NAMES[band])
+                                    .size(11.0)
+                                    .color(SPOT_GRAY),
+                            );
+                            let mut v = self
+                                .player
+                                .eq_gains()
+                                .read()
+                                .map(|g| g[band])
+                                .unwrap_or(0.0);
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut v, -12.0..=12.0)
+                                        .vertical()
+                                        .show_value(false),
+                                )
+                                .changed()
+                            {
+                                self.player.set_eq_gain(band, v);
+                                self.eq_preset = String::from("Kustom");
+                            }
+                            ui.label(
+                                egui::RichText::new(format!("{:+.0}", v))
+                                    .size(10.0)
+                                    .color(SPOT_DIM),
+                            );
+                        });
+                    }
+                });
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    for (name, gains) in crate::audio::EQ_PRESETS {
+                        let active = self.eq_preset == *name;
+                        if ui
+                            .selectable_label(
+                                active,
+                                egui::RichText::new(*name).size(12.0).color(if active {
+                                    SPOT_WHITE
+                                } else {
+                                    SPOT_GRAY
+                                }),
+                            )
+                            .clicked()
+                        {
+                            self.player.set_eq_all(*gains);
+                            self.eq_preset = String::from(*name);
+                        }
+                    }
+                });
+            });
+        if !open {
+            self.show_eq = false;
+        }
+    }
+
+    /// Sinkronkan cover art dengan lagu aktif; dipanggil tiap frame dari ui().
+    fn sync_cover(&mut self, ctx: &egui::Context) {
+        let path = self.current.and_then(|i| self.tracks.get(i)).map(|t| t.path.clone());
+        if path == self.cover_for {
+            return;
+        }
+        self.cover_for = path.clone();
+        self.cover_texture = path
+            .as_ref()
+            .and_then(|p| crate::library::cover_art(p))
+            .and_then(|bytes| image::load_from_memory(&bytes).ok())
+            .map(|img| {
+                let rgba = img.to_rgba8();
+                let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                let pixels = rgba
+                    .pixels()
+                    .map(|p| egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
+                    .collect::<Vec<_>>();
+                let cimg = egui::ColorImage::new([w, h], pixels);
+                ctx.load_texture("cover-art", cimg, egui::TextureOptions::LINEAR)
+            });
     }
 
     /// Tampilan lirik ala Spotify: kolom tengah, baris aktif putih besar + karaoke.
@@ -1071,10 +1247,23 @@ impl MusicApp {
 
     fn filtered_indices(&self) -> Vec<usize> {
         let q = self.search.to_lowercase();
+        // Bila playlist aktif, hanya tampilkan lagu di playlist itu.
+        let in_playlist: Option<std::collections::HashSet<PathBuf>> =
+            self.active_playlist.and_then(|i| {
+                self.playlists
+                    .get(i)
+                    .map(|pl| pl.paths.iter().cloned().collect())
+            });
         self.tracks
             .iter()
             .enumerate()
             .filter(|(_, t)| q.is_empty() || t.display().to_lowercase().contains(&q))
+            .filter(|(_, t)| {
+                in_playlist
+                    .as_ref()
+                    .map(|set| set.contains(&t.path))
+                    .unwrap_or(true)
+            })
             .map(|(i, _)| i)
             .collect()
     }
@@ -1131,6 +1320,7 @@ fn fmt_time(secs: f64) -> String {
 impl eframe::App for MusicApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_channels();
+        self.sync_cover(ui.ctx());
 
         // Lanjut otomatis ke lagu berikut saat selesai (hormati shuffle & repeat)
         if self.player.finished() {
@@ -1218,6 +1408,99 @@ impl eframe::App for MusicApp {
                             .desired_width(f32::INFINITY),
                     );
                     cui.add_space(10.0);
+                    // ---- Playlist pengguna: chips + buat/hapus ----
+                    cui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Playlist")
+                                .size(13.0)
+                                .strong()
+                                .color(SPOT_GRAY),
+                        );
+                        if ui
+                            .small_button("＋")
+                            .on_hover_text("Buat playlist baru")
+                            .clicked()
+                        {
+                            self.show_playlist_input = !self.show_playlist_input;
+                        }
+                    });
+                    if self.show_playlist_input {
+                        cui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.new_playlist_name)
+                                    .hint_text("Nama playlist...")
+                                    .desired_width(140.0),
+                            );
+                            if ui.small_button("Buat").clicked()
+                                && !self.new_playlist_name.trim().is_empty()
+                            {
+                                self.playlists.push(playlist::Playlist::new(
+                                    self.new_playlist_name.trim(),
+                                ));
+                                playlist::save(&self.playlists);
+                                self.new_playlist_name.clear();
+                                self.show_playlist_input = false;
+                            }
+                        });
+                        cui.add_space(4.0);
+                    }
+                    if !self.playlists.is_empty() {
+                        cui.horizontal_wrapped(|ui| {
+                            let mut delete_idx: Option<usize> = None;
+                            let mut select_idx: Option<Option<usize>> = None;
+                            // "Semua" untuk kembali ke library penuh.
+                            if ui
+                                .selectable_label(
+                                    self.active_playlist.is_none(),
+                                    egui::RichText::new("Semua").size(12.0),
+                                )
+                                .clicked()
+                            {
+                                select_idx = Some(None);
+                            }
+                            for (i, pl) in self.playlists.iter().enumerate() {
+                                let active = self.active_playlist == Some(i);
+                                if ui
+                                    .selectable_label(
+                                        active,
+                                        egui::RichText::new(format!(
+                                            "🎵 {} ({})",
+                                            pl.name,
+                                            pl.paths.len()
+                                        ))
+                                        .size(12.0),
+                                    )
+                                    .on_hover_text("Klik untuk filter; klik kanan untuk hapus")
+                                    .clicked()
+                                {
+                                    select_idx = Some(Some(i));
+                                }
+                                // Klik kanan pada chip = hapus playlist.
+                                // (egui: context menu per chip)
+                                // Disederhanakan: tombol × kecil saat aktif.
+                                if active
+                                    && ui
+                                        .small_button("×")
+                                        .on_hover_text("Hapus playlist ini")
+                                        .clicked()
+                                {
+                                    delete_idx = Some(i);
+                                }
+                            }
+                            if let Some(sel) = select_idx {
+                                self.active_playlist = sel;
+                                self.current = None;
+                                self.player.stop();
+                            }
+                            if let Some(i) = delete_idx {
+                                self.playlists.remove(i);
+                                playlist::save(&self.playlists);
+                                self.active_playlist = None;
+                            }
+                        });
+                        cui.add_space(4.0);
+                    }
+                    cui.add_space(6.0);
                     // Tombol play hijau + info
                     cui.horizontal(|ui| {
                         self.green_play_button(ui, 50.0);
@@ -1237,6 +1520,57 @@ impl eframe::App for MusicApp {
                         });
                     });
                     cui.add_space(8.0);
+                    // Now playing: cover art + judul/artis lagu aktif.
+                    if let Some(t) = self.current.and_then(|i| self.tracks.get(i)) {
+                        cui.horizontal(|ui| {
+                            let cover_size = 52.0;
+                            if let Some(tex) = &self.cover_texture {
+                                ui.add(
+                                    egui::Image::new(tex)
+                                        .max_size(egui::vec2(cover_size, cover_size))
+                                        .corner_radius(6.0),
+                                );
+                            } else {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(cover_size, cover_size),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    rect,
+                                    6.0,
+                                    egui::Color32::from_rgb(0x28, 0x28, 0x28),
+                                );
+                                ui.painter().text(
+                                    rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    "♪",
+                                    egui::FontId::proportional(24.0),
+                                    SPOT_DIM,
+                                );
+                            }
+                            ui.add_space(8.0);
+                            ui.vertical(|ui| {
+                                ui.add_space(4.0);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&t.title)
+                                            .size(13.0)
+                                            .strong()
+                                            .color(SPOT_WHITE),
+                                    )
+                                    .truncate(),
+                                );
+                                if !t.artist.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(&t.artist)
+                                            .size(11.0)
+                                            .color(SPOT_GRAY),
+                                    );
+                                }
+                            });
+                        });
+                        cui.add_space(8.0);
+                    }
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(&mut cui, |ui| {
@@ -1402,6 +1736,8 @@ impl eframe::App for MusicApp {
                 egui::Stroke::new(lw, line_col),
             );
         }
+        // Window equalizer (bila dibuka dari tombol 🎚).
+        self.show_eq_window(ui.ctx());
         // Refresh terus agar lirik & progress sinkron.
         // Saat lagu diputar, repaint tiap frame supaya scroll lirik mulus;
         // saat pause cukup 5x/detik untuk hemat CPU.

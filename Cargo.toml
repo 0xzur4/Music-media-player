@@ -1,6 +1,6 @@
 [package]
 name = "joni-music"
-version = "1.7.7"
+version = "1.8.0"
 license = "MIT"
 edition = "2021"
 description = "Music media player (offline + online synced lyrics) untuk Windows"
@@ -9,7 +9,9 @@ description = "Music media player (offline + online synced lyrics) untuk Windows
 eframe = "0.36"
 egui = "0.36"
 rodio = "0.22"
+biquad = "0.6"
 lofty = "0.22"
+image = "0.25"
 ureq = { version = "3", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

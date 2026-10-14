@@ -115,3 +115,16 @@ pub fn scan(dir: &Path) -> Vec<Track> {
     tracks.sort_by(|a, b| a.display().to_lowercase().cmp(&b.display().to_lowercase()));
     tracks
 }
+
+/// Ambil cover art embedded (bytes gambar) dari file audio, bila ada.
+pub fn cover_art(path: &Path) -> Option<Vec<u8>> {
+    let tagged = lofty::read_from_path(path).ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
+    let pic = tag.pictures().first()?;
+    let data = pic.data();
+    if data.is_empty() {
+        None
+    } else {
+        Some(data.to_vec())
+    }
+}
