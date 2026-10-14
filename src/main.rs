@@ -375,10 +375,10 @@ impl MusicApp {
                 egui::WindowLevel::AlwaysOnTop,
             ));
             ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(
-                320.0, 480.0,
+                160.0, 420.0,
             )));
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                360.0, 540.0,
+                180.0, 540.0,
             )));
         } else {
             ctx.send_viewport_cmd(egui::ViewportCommand::Transparent(false));
@@ -392,7 +392,7 @@ impl MusicApp {
         }
     }
 
-    /// Tampilan mini player portrait (360x540): cover besar + kontrol lengkap.
+    /// Tampilan mini player kompak (180x540 default, lebar bisa di-resize manual).
     fn show_mini(&mut self, ui: &mut egui::Ui) {
         let bg = ui.max_rect();
         let bg_col = egui::Color32::from_rgba_unmultiplied(14, 14, 16, 230);
@@ -404,7 +404,7 @@ impl MusicApp {
             egui::StrokeKind::Outside,
         );
 
-        let pad = 16.0;
+        let pad = 12.0;
         let content_r = bg.shrink(pad);
         let mut cui = ui.new_child(
             egui::UiBuilder::new()
@@ -413,10 +413,12 @@ impl MusicApp {
         );
 
         let w = content_r.width();
-        // Cover proporsional terhadap lebar jendela.
-        let cover_sz = ((w - 16.0) * 0.62).clamp(140.0, 210.0);
-        let title_size = 20.0;
-        let artist_size = 13.0;
+        // Skala responsif terhadap lebar (acuan 328 = konten saat 360px).
+        let bs = (w / 328.0).clamp(0.72, 1.0);
+        let ts = (w / 328.0).clamp(0.62, 1.0);
+        let cover_sz = (w * 0.58).clamp(70.0, 210.0);
+        let title_size = 20.0 * ts;
+        let artist_size = 13.0 * ts;
 
         // ---- Cover (area drag) ----
         let (cover_rect, cover_resp) =
@@ -438,7 +440,7 @@ impl MusicApp {
                 cover_rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "♪",
-                egui::FontId::proportional(64.0),
+                egui::FontId::proportional(cover_sz * 0.35),
                 SPOT_DIM,
             );
         }
@@ -450,13 +452,12 @@ impl MusicApp {
             cui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
 
-        cui.add_space(12.0);
+        cui.add_space(10.0);
 
         // ---- Judul + artis (tengah, juga area drag) ----
-        let (text_rect, text_resp) = cui.allocate_exact_size(
-            egui::vec2(w, title_size + artist_size + 10.0),
-            egui::Sense::click_and_drag(),
-        );
+        let text_h = title_size + artist_size + 8.0;
+        let (text_rect, text_resp) =
+            cui.allocate_exact_size(egui::vec2(w, text_h), egui::Sense::click_and_drag());
         {
             let p = cui.painter();
             if let Some(t) = self.current.and_then(|i| self.tracks.get(i)) {
@@ -469,7 +470,7 @@ impl MusicApp {
                 );
                 if !t.artist.is_empty() {
                     p.text(
-                        egui::pos2(text_rect.center().x, text_rect.min.y + title_size + 4.0),
+                        egui::pos2(text_rect.center().x, text_rect.min.y + title_size + 3.0),
                         egui::Align2::CENTER_TOP,
                         &t.artist,
                         egui::FontId::proportional(artist_size),
@@ -478,7 +479,7 @@ impl MusicApp {
                 }
             } else {
                 p.text(
-                    egui::pos2(text_rect.center().x, text_rect.min.y + 6.0),
+                    egui::pos2(text_rect.center().x, text_rect.min.y + 4.0),
                     egui::Align2::CENTER_TOP,
                     "Joni Music",
                     egui::FontId::proportional(title_size),
@@ -494,7 +495,7 @@ impl MusicApp {
             cui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
 
-        cui.add_space(6.0);
+        cui.add_space(4.0);
 
         // ---- Baris lirik karaoke ----
         let pos = self.player.position();
@@ -509,13 +510,14 @@ impl MusicApp {
                         };
                         cui.add(
                             egui::Label::new(
-                                egui::RichText::new(ltext).size(14.0).strong().color(
-                                    egui::Color32::from_rgb(120, 220, 130),
-                                ),
+                                egui::RichText::new(ltext)
+                                    .size(14.0 * ts)
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(120, 220, 130)),
                             )
                             .truncate(),
                         );
-                        cui.add_space(6.0);
+                        cui.add_space(4.0);
                     }
                 }
             }
@@ -525,7 +527,7 @@ impl MusicApp {
         let dur = self.player.duration().max(0.01);
         let p = (pos / dur).clamp(0.0, 1.0) as f32;
         let (br, bar_resp) =
-            cui.allocate_exact_size(egui::vec2(w, 16.0), egui::Sense::click_and_drag());
+            cui.allocate_exact_size(egui::vec2(w, 14.0), egui::Sense::click_and_drag());
         let thick = if bar_resp.hovered() || bar_resp.dragged() { 6.0 } else { 4.0 };
         let cy = br.center().y;
         let track_rect = egui::Rect::from_min_max(
@@ -547,7 +549,7 @@ impl MusicApp {
             if bar_resp.hovered() || bar_resp.dragged() {
                 cui.painter().circle_filled(
                     egui::pos2(track_rect.min.x + fill_w, cy),
-                    7.0,
+                    6.0,
                     egui::Color32::WHITE,
                 );
             }
@@ -564,7 +566,7 @@ impl MusicApp {
         cui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(fmt_time(pos))
-                    .size(11.0)
+                    .size(10.0)
                     .color(SPOT_DIM),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -576,15 +578,17 @@ impl MusicApp {
             });
         });
 
-        cui.add_space(10.0);
+        cui.add_space(8.0);
 
         // ---- Kontrol utama ----
         cui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 18.0;
+            ui.spacing_mut().item_spacing.x = 14.0 * bs;
+            let pn_sz = 44.0 * bs;
+            let play_sz = 58.0 * bs;
             if ui
                 .add_sized(
-                    egui::vec2(44.0, 44.0),
-                    egui::Button::new(egui::RichText::new("⏮").size(20.0)).frame(false),
+                    egui::vec2(pn_sz, pn_sz),
+                    egui::Button::new(egui::RichText::new("⏮").size(20.0 * bs)).frame(false),
                 )
                 .on_hover_text("Sebelumnya")
                 .clicked()
@@ -594,14 +598,14 @@ impl MusicApp {
             let play_label = if self.player.is_playing() { "⏸" } else { "▶" };
             if ui
                 .add_sized(
-                    egui::vec2(60.0, 60.0),
+                    egui::vec2(play_sz, play_sz),
                     egui::Button::new(
                         egui::RichText::new(play_label)
-                            .size(24.0)
+                            .size(24.0 * bs)
                             .color(egui::Color32::BLACK),
                     )
                     .fill(SPOT_GREEN)
-                    .corner_radius(30.0),
+                    .corner_radius(play_sz / 2.0),
                 )
                 .on_hover_text("Putar / Jeda")
                 .clicked()
@@ -614,8 +618,8 @@ impl MusicApp {
             }
             if ui
                 .add_sized(
-                    egui::vec2(44.0, 44.0),
-                    egui::Button::new(egui::RichText::new("⏭").size(20.0)).frame(false),
+                    egui::vec2(pn_sz, pn_sz),
+                    egui::Button::new(egui::RichText::new("⏭").size(20.0 * bs)).frame(false),
                 )
                 .on_hover_text("Berikutnya")
                 .clicked()
@@ -624,12 +628,12 @@ impl MusicApp {
             }
         });
 
-        cui.add_space(10.0);
+        cui.add_space(8.0);
 
         // ---- Baris bawah: volume | expand + tutup ----
         cui.horizontal(|ui| {
             let vol_resp = ui
-                .add_sized(egui::vec2(36.0, 30.0), egui::Button::new("🔊").frame(false))
+                .add_sized(egui::vec2(32.0, 28.0), egui::Button::new("🔊").frame(false))
                 .on_hover_text("Volume");
             let mut vol = self.volume;
             let popup = egui::Popup::from_toggle_button_response(&vol_resp)
@@ -649,14 +653,14 @@ impl MusicApp {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_sized(egui::vec2(32.0, 30.0), egui::Button::new("✕").frame(false))
+                    .add_sized(egui::vec2(30.0, 28.0), egui::Button::new("✕").frame(false))
                     .on_hover_text("Tutup Joni Music")
                     .clicked()
                 {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 if ui
-                    .add_sized(egui::vec2(32.0, 30.0), egui::Button::new("⛶").frame(false))
+                    .add_sized(egui::vec2(30.0, 28.0), egui::Button::new("⛶").frame(false))
                     .on_hover_text("Kembali ke tampilan penuh")
                     .clicked()
                 {
@@ -665,7 +669,40 @@ impl MusicApp {
                 }
             });
         });
+
+        // ---- Resize handle: tepi kanan untuk ubah lebar (window borderless
+        // tidak punya resize grip OS, jadi dibuat manual) ----
+        let rw = 8.0;
+        let rrect = egui::Rect::from_min_max(
+            egui::pos2(bg.max.x - rw, bg.min.y + 30.0),
+            egui::pos2(bg.max.x, bg.max.y - 30.0),
+        );
+        let rresp = ui.interact(
+            rrect,
+            egui::Id::new("mini_resize_w"),
+            egui::Sense::click_and_drag(),
+        );
+        if rresp.hovered() || rresp.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if rresp.dragged() {
+            let dx = rresp.drag_delta().x;
+            if dx.abs() > f32::EPSILON {
+                let (cur_w, cur_h) = ui.ctx().input(|i| {
+                    i.viewport()
+                        .inner_rect
+                        .map(|r| (r.width(), r.height()))
+                        .unwrap_or((180.0, 540.0))
+                });
+                let new_w = (cur_w + dx).clamp(160.0, 420.0);
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                        new_w, cur_h,
+                    )));
+            }
+        }
     }
+
 
 
     /// Tampilan daftar lagu ala Spotify: header + tabel # | Judul | Album | Durasi.
