@@ -12,23 +12,16 @@ Get the latest Windows build from the
 ## Features
 
 - **Offline**: play your downloaded songs (mp3, flac, ogg, wav, m4a, aac, opus)
-- **Online**: synced lyrics (LRC) are fetched automatically from the internet
-  (lrclib.net) the first time a song plays, then **cached** — subsequent
-  plays show lyrics instantly, offline
-- **Spotify-style karaoke lyrics**: big white active line with a running green
-  bar, smooth auto-scroll, click any line to jump to that part
-- **Mini player**: minimizing switches to a small transparent always-on-top
-  window with the title + active lyric line; resizable, font scales with
-  the window
-- **CJK support**: Japanese (hiragana, katakana, kanji), Korean (hangul) and
-  Chinese characters render correctly in song titles and lyrics, via bundled
-  Noto Sans CJK subset fonts
-- **Audio output selection**: pick headset / earphones / speakers manually
-  from the sidebar footer (🔈) — useful when a newly plugged device does not
-  become the system default automatically; the song continues from the same
-  position on the new device
-- Playlist + search, seek bar, volume control, auto-advance to the next song
-- Dark Spotify-like theme
+- **Online & local synced lyrics**: LRC lyrics are loaded from a local `.lrc` sidecar file, cache, or fetched automatically from `lrclib.net` and cached for offline use
+- **Spotify-style karaoke lyrics**: dynamic cover-tinted gradient background, big bold white active line, smooth auto-scroll, click any line to jump, plus one-click online refresh
+- **Modern Spotify-like desktop UI**: full-width bottom player bar (cover art, transport, thin seek bar, inline volume & mute, audio output picker, EQ, lyrics toggle, mini player), crisp custom vector icons, resizable sidebar with colored playlist tiles, and virtualized track table
+- **Sorting & scoped search**: search by All / Title / Artist / Album and sort by Default, Title, Artist, Album, or Duration (ascending/descending)
+- **5-band Equalizer & playlists**: live biquad EQ with presets (Flat, Rock, Pop, Jazz, Klasik, Bass), custom playlists, and playback queue scoped to the active playlist
+- **Persistent settings**: remembers volume, mute, EQ preset/gains, shuffle, repeat, sort, search scope, sidebar width, and resumes the last played track & position
+- **Keyboard shortcuts**: `Space`/`K` (play/pause), `←`/`→` (seek ±5s, `Shift` ±15s), `Ctrl+←`/`→` or `P`/`N` (prev/next), `↑`/`↓` (volume), `M` (mute), `S` (shuffle), `R` (repeat), `L` (lyrics), `E` (EQ), `Ctrl+F` (search), `F1` (shortcuts help)
+- **Mini player**: borderless always-on-top compact window with cover art, active lyric line, seek bar, vector controls, and manual resize handle
+- **CJK support**: Japanese, Korean, and Chinese characters render via bundled Noto Sans CJK subset fonts
+- **Audio output selection**: switch headset / earphones / speakers live from the bottom bar without losing track position
 
 ## Layout (Spotify clone)
 

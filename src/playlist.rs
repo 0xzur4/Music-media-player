@@ -49,14 +49,11 @@ pub fn load() -> Vec<Playlist> {
     serde_json::from_str(&text).unwrap_or_default()
 }
 
-/// Simpan semua playlist ke disk.
+/// Simpan semua playlist ke disk secara atomik.
 pub fn save(playlists: &[Playlist]) {
     if let Some(p) = playlists_path() {
-        if let Some(parent) = p.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
         if let Ok(text) = serde_json::to_string_pretty(playlists) {
-            let _ = std::fs::write(p, text);
+            crate::config::write_atomic(&p, &text);
         }
     }
 }

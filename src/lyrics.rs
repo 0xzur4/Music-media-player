@@ -93,7 +93,7 @@ pub fn parse_lrc(text: &str) -> Lyrics {
             l.time = (l.time + offset_secs).max(0.0);
         }
     }
-    lines.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+    lines.sort_by(|a, b| a.time.total_cmp(&b.time));
     let synced = !lines.is_empty();
     Lyrics { lines, synced }
 }
@@ -213,14 +213,48 @@ fn cache_path(track: &Track) -> Option<PathBuf> {
     cache_dir().map(|d| d.join(format!("{}.lrc", track.cache_key())))
 }
 
-/// Ambil lirik: cache dulu, kalau tidak ada coba unduh dari lrclib.net.
-/// Mengembalikan (Lyrics, dari_cache).
-pub fn get_lyrics(track: &Track) -> (Option<Lyrics>, bool) {
-    if let Some(p) = cache_path(track) {
-        if let Ok(text) = fs::read_to_string(&p) {
+fn parse_plain(text: &str) -> Lyrics {
+    Lyrics {
+        lines: text
+            .lines()
+            .map(|l| LyricLine {
+                time: 0.0,
+                text: l.trim().to_string(),
+            })
+            .filter(|l| !l.text.is_empty())
+            .collect(),
+        synced: false,
+    }
+}
+
+/// Ambil lirik: file `.lrc` lokal di samping audio -> cache -> unduh dari lrclib.net.
+/// Mengembalikan `(Lyrics, dari_cache)`. Bila `force_online = true`, lewati cache dan
+/// unduh ulang dari internet.
+pub fn get_lyrics_with_options(track: &Track, force_online: bool) -> (Option<Lyrics>, bool) {
+    if !force_online {
+        // 1. Cek file .lrc lokal di folder yang sama dengan file audio.
+        let sidecar = track.path.with_extension("lrc");
+        if let Ok(text) = fs::read_to_string(&sidecar) {
             let lyrics = parse_lrc(&text);
             if lyrics.synced {
                 return (Some(lyrics), true);
+            }
+            let plain = parse_plain(&text);
+            if !plain.lines.is_empty() {
+                return (Some(plain), true);
+            }
+        }
+        // 2. Cek cache lokal (termasuk lirik plain agar tetap bisa offline).
+        if let Some(p) = cache_path(track) {
+            if let Ok(text) = fs::read_to_string(&p) {
+                let lyrics = parse_lrc(&text);
+                if lyrics.synced {
+                    return (Some(lyrics), true);
+                }
+                let plain = parse_plain(&text);
+                if !plain.lines.is_empty() {
+                    return (Some(plain), true);
+                }
             }
         }
     }
@@ -237,21 +271,12 @@ pub fn get_lyrics(track: &Track) -> (Option<Lyrics>, bool) {
             if lyrics.synced {
                 (Some(lyrics), false)
             } else {
-                // Simpan lirik biasa sebagai fallback tampilan
-                (
-                    Some(Lyrics {
-                        lines: text
-                            .lines()
-                            .map(|l| LyricLine {
-                                time: 0.0,
-                                text: l.trim().to_string(),
-                            })
-                            .filter(|l| !l.text.is_empty())
-                            .collect(),
-                        synced: false,
-                    }),
-                    false,
-                )
+                let plain = parse_plain(&text);
+                if plain.lines.is_empty() {
+                    (None, false)
+                } else {
+                    (Some(plain), false)
+                }
             }
         }
         None => (None, false),

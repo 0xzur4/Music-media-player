@@ -33,7 +33,7 @@ pub const EQ_PRESETS: &[(&str, [f32; 5])] = &[
 /// langsung ke lagu yang sedang diputar tanpa restart.
 pub struct Equalizer<S> {
     input: S,
-    filters: Vec<[DirectForm1<f32>; 5]>,
+    filters: Vec<[Option<DirectForm1<f32>>; 5]>,
     gains: EqGains,
     last_gains: [f32; 5],
     ch_idx: usize,
@@ -46,20 +46,12 @@ where
 {
     pub fn new(input: S, gains: EqGains) -> Self {
         let sample_rate = input.sample_rate();
-        let n_channels = input.channels().get() as usize;
+        let n_channels = (input.channels().get() as usize).max(1);
         let g = *gains.read().unwrap_or_else(|e| e.into_inner());
+        let sr = sample_rate.get() as f32;
         let filters = (0..n_channels)
             .map(|_| {
-                EQ_FREQS.map(|f| {
-                    let coeffs = Coefficients::<f32>::from_params(
-                        Type::PeakingEQ(0.0),
-                        sample_rate.get().hz(),
-                        f.hz(),
-                        Q_BUTTERWORTH_F32,
-                    )
-                    .unwrap();
-                    DirectForm1::<f32>::new(coeffs)
-                })
+                EQ_FREQS.map(|f| make_band_coeffs(sr, f, 0.0).map(DirectForm1::<f32>::new))
             })
             .collect();
         let mut eq = Self {
@@ -68,28 +60,40 @@ where
             gains,
             last_gains: [f32::NAN; 5], // paksa update pertama
             ch_idx: 0,
-            n_channels: n_channels.max(1),
+            n_channels,
         };
         eq.sync_gains(&g);
         eq
     }
 
     fn sync_gains(&mut self, g: &[f32; 5]) {
-        let sr = self.input.sample_rate();
+        let sr = self.input.sample_rate().get() as f32;
         for ch in self.filters.iter_mut() {
-            for (band, filt) in ch.iter_mut().enumerate() {
-                let coeffs = Coefficients::<f32>::from_params(
-                    Type::PeakingEQ(g[band]),
-                    sr.get().hz(),
-                    EQ_FREQS[band].hz(),
-                    Q_BUTTERWORTH_F32,
-                )
-                .unwrap();
-                filt.update_coefficients(coeffs);
+            for (band, filt_opt) in ch.iter_mut().enumerate() {
+                if let Some(filt) = filt_opt.as_mut() {
+                    if let Some(coeffs) = make_band_coeffs(sr, EQ_FREQS[band], g[band]) {
+                        filt.update_coefficients(coeffs);
+                    }
+                }
             }
         }
         self.last_gains = *g;
     }
+}
+
+/// Hitung koefisien peaking EQ dengan aman (lewati band di atas Nyquist agar tidak panik
+/// pada file audio ber-sample-rate rendah seperti 16kHz atau 22.05kHz).
+fn make_band_coeffs(sample_rate: f32, freq: f32, gain_db: f32) -> Option<Coefficients<f32>> {
+    if sample_rate <= 0.0 || freq >= sample_rate * 0.48 {
+        return None;
+    }
+    Coefficients::<f32>::from_params(
+        Type::PeakingEQ(gain_db.clamp(-12.0, 12.0)),
+        sample_rate.hz(),
+        freq.hz(),
+        Q_BUTTERWORTH_F32,
+    )
+    .ok()
 }
 
 impl<S> Iterator for Equalizer<S>
@@ -112,9 +116,11 @@ where
         }
         let mut x = sample;
         let n = self.filters.len();
-        let ch = &mut self.filters[self.ch_idx % n];
-        for filt in ch.iter_mut() {
-            x = filt.run(x);
+        if n > 0 {
+            let ch = &mut self.filters[self.ch_idx % n];
+            for filt in ch.iter_mut().flatten() {
+                x = filt.run(x);
+            }
         }
         // Soft clip agar boost besar tidak pecah.
         let x = x.clamp(-1.2, 1.2);
@@ -166,6 +172,7 @@ fn open_for(label: Option<&str>) -> anyhow::Result<(MixerDeviceSink, RodioPlayer
             let host = cpal::default_host();
             let mut found = None;
             for d in host.output_devices()? {
+                #[allow(deprecated)]
                 if let Ok(n) = d.name() {
                     if names_match(&n, name) {
                         found = Some(d);
@@ -188,6 +195,7 @@ pub fn output_device_names() -> Vec<String> {
     let mut names = Vec::new();
     if let Ok(devices) = cpal::default_host().output_devices() {
         for d in devices {
+            #[allow(deprecated)]
             if let Ok(n) = d.name() {
                 let n = n.trim().to_string();
                 if !n.is_empty() && !names.contains(&n) {
@@ -199,37 +207,73 @@ pub fn output_device_names() -> Vec<String> {
     names
 }
 
-/// Wrapper rodio. Posisi putar dibaca dari `get_pos()` rodio
-/// sehingga lirik selalu tersinkron.
-pub struct Player {
+struct OutputBackend {
     _sink: MixerDeviceSink,
     inner: RodioPlayer,
+}
+
+/// Wrapper rodio. Posisi putar dibaca dari `get_pos()` rodio
+/// sehingga lirik selalu tersinkron. Dapat hidup tanpa perangkat audio
+/// (tidak panik saat startup bila headset/speaker belum tersambung).
+pub struct Player {
+    backend: Option<OutputBackend>,
     playing: bool,
     duration: f64,
     volume: f32,
+    muted: bool,
     current_track: Option<Track>,
     device_label: Option<String>,
     eq_gains: EqGains,
 }
 
 impl Player {
-    pub fn new() -> anyhow::Result<Self> {
-        Self::with_device(None)
-    }
-
-    pub fn with_device(label: Option<&str>) -> anyhow::Result<Self> {
-        let (sink, inner) = open_for(label)?;
-        let p = Self {            _sink: sink,
-            inner,
+    /// Buat player; bila perangkat audio tidak tersedia, tetap sukses dalam
+    /// mode standby dan mengembalikan pesan error opsional.
+    pub fn new_graceful(label: Option<&str>) -> (Self, Option<String>) {
+        let mut p = Self {
+            backend: None,
             playing: false,
             duration: 0.0,
             volume: 0.8,
+            muted: false,
             current_track: None,
-            device_label: label.map(|s| s.to_string()),
+            device_label: None,
             eq_gains: Arc::new(RwLock::new([0.0; 5])),
         };
-        p.inner.set_volume(0.8);
-        Ok(p)
+        let mut warning = None;
+        if let Some(dev) = label {
+            match open_for(Some(dev)) {
+                Ok((sink, inner)) => {
+                    inner.set_volume(p.effective_volume());
+                    p.backend = Some(OutputBackend { _sink: sink, inner });
+                    p.device_label = Some(dev.to_string());
+                    return (p, None);
+                }
+                Err(e) => {
+                    warning = Some(format!(
+                        "Perangkat audio tersimpan tidak tersedia ({e}); mencoba default."
+                    ));
+                }
+            }
+        }
+        match open_for(None) {
+            Ok((sink, inner)) => {
+                inner.set_volume(p.effective_volume());
+                p.backend = Some(OutputBackend { _sink: sink, inner });
+            }
+            Err(e) => {
+                warning = Some(format!("Perangkat audio tidak tersedia ({e})."));
+            }
+        }
+        (p, warning)
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.backend.is_some()
+    }
+
+    fn effective_volume(&self) -> f32 {
+        if self.muted { 0.0 } else { self.volume }
     }
 
     /// Label perangkat yang sedang dipakai; None = default sistem.
@@ -240,16 +284,15 @@ impl Player {
     /// Ganti perangkat output audio. Lagu yang sedang diputar dilanjutkan
     /// dari posisi yang sama di perangkat baru.
     pub fn set_output_device(&mut self, label: Option<&str>) -> anyhow::Result<()> {
-        if self.device_label.as_deref() == label {
+        if self.backend.is_some() && self.device_label.as_deref() == label {
             return Ok(());
         }
         let was_playing = self.playing;
         let pos = self.position();
         let track = self.current_track.clone();
         let (sink, inner) = open_for(label)?;
-        self._sink = sink;
-        self.inner = inner;
-        self.inner.set_volume(self.volume);
+        inner.set_volume(self.effective_volume());
+        self.backend = Some(OutputBackend { _sink: sink, inner });
         self.device_label = label.map(|s| s.to_string());
         if let Some(t) = track {
             self.play_raw(&t, pos, was_playing)?;
@@ -259,32 +302,58 @@ impl Player {
         Ok(())
     }
 
+    fn ensure_backend(&mut self) -> anyhow::Result<()> {
+        if self.backend.is_none() {
+            let label = self.device_label.clone();
+            let (sink, inner) = open_for(label.as_deref()).or_else(|_| open_for(None))?;
+            inner.set_volume(self.effective_volume());
+            self.backend = Some(OutputBackend { _sink: sink, inner });
+        }
+        Ok(())
+    }
+
     fn play_raw(&mut self, track: &Track, from_pos: f64, autoplay: bool) -> anyhow::Result<()> {
-        self.inner.clear();
+        self.ensure_backend()?;
+        let backend = self
+            .backend
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("perangkat audio tidak tersedia"))?;
+        backend.inner.clear();
         let file = BufReader::new(File::open(&track.path)?);
         let source = Decoder::new(file)?;
+        let decoded_dur = source.total_duration().map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        let dur = if track.duration_secs > 0.0 {
+            track.duration_secs
+        } else {
+            decoded_dur
+        };
         let source = Equalizer::new(source, self.eq_gains.clone());
-        self.inner.append(source);
-        self.duration = track.duration_secs;
+        backend.inner.append(source);
+        self.duration = dur;
         self.current_track = Some(track.clone());
-        if from_pos > 0.5 {
-            let _ = self
+        if from_pos > 0.5 && dur > 0.0 {
+            let _ = backend
                 .inner
-                .try_seek(Duration::from_secs_f64(from_pos.clamp(0.0, self.duration)));
+                .try_seek(Duration::from_secs_f64(from_pos.clamp(0.0, dur)));
         }
         if autoplay {
-            self.inner.play();
+            backend.inner.play();
             self.playing = true;
         } else {
-            self.inner.pause();
+            backend.inner.pause();
             self.playing = false;
         }
         Ok(())
     }
 
-    /// Handle gain EQ yang dishare dengan audio thread; UI menulis lewat ini.
-    pub fn eq_gains(&self) -> EqGains {
-        self.eq_gains.clone()
+    /// Muat lagu dalam keadaan jeda pada posisi tertentu (untuk resume sesi terakhir).
+    pub fn load_paused(&mut self, track: &Track, from_pos: f64) -> anyhow::Result<()> {
+        self.play_raw(track, from_pos, false)
+    }
+
+    /// Baca gain 5 band saat ini.
+    pub fn eq_gains_snapshot(&self) -> [f32; 5] {
+        *self.eq_gains.read().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Atur gain satu band (dB, -12..+12). Berlaku langsung ke lagu berjalan.
@@ -299,7 +368,7 @@ impl Player {
     /// Atur semua band sekaligus (preset).
     pub fn set_eq_all(&self, gains: [f32; 5]) {
         if let Ok(mut g) = self.eq_gains.write() {
-            *g = gains;
+            *g = gains.map(|v| v.clamp(-12.0, 12.0));
         }
     }
 
@@ -308,8 +377,10 @@ impl Player {
     }
 
     pub fn stop(&mut self) {
-        self.inner.clear();
-        self.inner.stop();
+        if let Some(b) = &self.backend {
+            b.inner.clear();
+            b.inner.stop();
+        }
         self.playing = false;
         self.current_track = None;
     }
@@ -323,20 +394,32 @@ impl Player {
     }
 
     pub fn pause(&mut self) {
-        self.inner.pause();
+        if let Some(b) = &self.backend {
+            b.inner.pause();
+        }
         self.playing = false;
     }
 
     pub fn resume(&mut self) {
-        if !self.inner.empty() {
-            self.inner.play();
-            self.playing = true;
+        if let Some(b) = &self.backend {
+            if !b.inner.empty() {
+                b.inner.play();
+                self.playing = true;
+            }
         }
     }
 
     /// Posisi putar dalam detik, langsung dari rodio.
     pub fn position(&self) -> f64 {
-        self.inner.get_pos().as_secs_f64().min(self.duration)
+        let Some(b) = &self.backend else {
+            return 0.0;
+        };
+        let pos = b.inner.get_pos().as_secs_f64();
+        if self.duration > 0.0 {
+            pos.min(self.duration)
+        } else {
+            pos
+        }
     }
 
     pub fn duration(&self) -> f64 {
@@ -344,29 +427,68 @@ impl Player {
     }
 
     pub fn is_playing(&self) -> bool {
-        self.playing && !self.inner.is_paused()
+        self.playing
+            && self
+                .backend
+                .as_ref()
+                .map(|b| !b.inner.is_paused())
+                .unwrap_or(false)
     }
 
     pub fn has_track(&self) -> bool {
-        !self.inner.empty()
+        self.backend
+            .as_ref()
+            .map(|b| !b.inner.empty())
+            .unwrap_or(false)
     }
 
     /// true jika lagu selesai natural.
     pub fn finished(&self) -> bool {
-        self.playing && self.inner.empty()
+        self.playing
+            && self
+                .backend
+                .as_ref()
+                .map(|b| b.inner.empty())
+                .unwrap_or(false)
     }
 
     pub fn seek(&mut self, pos: f64) {
-        let pos = pos.clamp(0.0, self.duration);
-        let _ = self.inner.try_seek(Duration::from_secs_f64(pos));
+        if let Some(b) = &self.backend {
+            let max = self.duration.max(0.0);
+            let pos = pos.clamp(0.0, max);
+            let _ = b.inner.try_seek(Duration::from_secs_f64(pos));
+        }
     }
 
     pub fn set_volume(&mut self, v: f32) {
         self.volume = v.clamp(0.0, 1.0);
-        self.inner.set_volume(self.volume);
+        if self.volume > 0.0 {
+            self.muted = false;
+        }
+        let eff = self.effective_volume();
+        if let Some(b) = &self.backend {
+            b.inner.set_volume(eff);
+        }
     }
 
-    pub fn volume(&self) -> f32 {
-        self.volume
+    pub fn set_muted(&mut self, muted: bool) {
+        self.muted = muted;
+        let eff = self.effective_volume();
+        if let Some(b) = &self.backend {
+            b.inner.set_volume(eff);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eq_low_sample_rate_does_not_panic() {
+        // 16kHz -> Nyquist 8kHz, band 14kHz harus dilewati tanpa panik.
+        assert!(make_band_coeffs(16000.0, 60.0, 3.0).is_some());
+        assert!(make_band_coeffs(16000.0, 14000.0, 3.0).is_none());
+        assert!(make_band_coeffs(44100.0, 14000.0, 3.0).is_some());
     }
 }

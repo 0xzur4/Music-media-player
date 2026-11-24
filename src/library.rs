@@ -51,8 +51,6 @@ fn from_filename(path: &Path) -> (String, String) {
         .unwrap_or("Unknown");
     if let Some((a, t)) = stem.split_once(" - ") {
         (a.trim().to_string(), t.trim().to_string())
-    } else if let Some((a, t)) = stem.split_once('-') {
-        (a.trim().to_string(), t.trim().to_string())
     } else {
         (String::new(), stem.trim().to_string())
     }
@@ -126,5 +124,21 @@ pub fn cover_art(path: &Path) -> Option<Vec<u8>> {
         None
     } else {
         Some(data.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filename_hyphen_not_mangled() {
+        let (a, t) = from_filename(Path::new("Anti-Hero.mp3"));
+        assert_eq!(a, "");
+        assert_eq!(t, "Anti-Hero");
+
+        let (a2, t2) = from_filename(Path::new("Taylor Swift - Anti-Hero.mp3"));
+        assert_eq!(a2, "Taylor Swift");
+        assert_eq!(t2, "Anti-Hero");
     }
 }
